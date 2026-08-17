@@ -8,9 +8,10 @@ import type { AppShellProps, LocationState, MessageTransferAction, MoveTarget, S
 import type { Bootstrap, Mailbox, SyncRun, User } from "../../types";
 import { Icon, LogoMark } from "../../components/Icon";
 import { androidNativeAvailable, shouldAdvertiseAndroidApp } from "../../lib/androidNative";
-import { folderTree, nodeContainsMailbox, type FolderNode } from "../../lib/folders";
+import { folderTree, folderTreeUnreadCount, nodeContainsMailbox, type FolderNode } from "../../lib/folders";
 import { shouldIgnoreMailShortcut } from "../../lib/keyboard";
 import { mailRoute, mailURL, searchRoute, searchURL, currentLocation } from "../../lib/routes";
+import { loadCollapsedAccounts, saveCollapsedAccounts } from "../../lib/sidebarLocal";
 import { createPluginSet } from "../../plugins/registry";
 import { SearchAutocomplete, useSearchAutocomplete } from "./SearchAutocomplete";
 
@@ -53,6 +54,7 @@ export function AppShell({
   const [messageDragActive, setMessageDragActive] = useState(false);
   const [touchDragPreview, setTouchDragPreview] = useState<TouchDragPreview | null>(null);
   const [touchDropID, setTouchDropID] = useState<number | null>(null);
+  const [touchRevealedAccounts, setTouchRevealedAccounts] = useState<string[]>([]);
   const appRef = useRef<HTMLDivElement>(null);
   const dragOpenedSidebar = useRef(false);
   const nativeDragInProgress = useRef(false);
@@ -154,6 +156,7 @@ export function AppShell({
       setMessageDragActive(false);
       setTouchDragPreview(null);
       setTouchDropID(null);
+      setTouchRevealedAccounts((current) => current.length > 0 ? [] : current);
       closeAutoOpenedSidebar();
       expireCompatibilityClickGuard();
     }
@@ -233,6 +236,12 @@ export function AppShell({
         session.movedAfterActivation = true;
       }
       setTouchDropID(session.movedAfterActivation ? touchDropTargetAt(touch.clientX, touch.clientY)?.id ?? null : null);
+      // Touch drags cannot fire dragenter, so dwelling on a collapsed account
+      // header is what opens it up as a drop target.
+      const accountKey = session.movedAfterActivation ? touchAccountKeyAt(touch.clientX, touch.clientY) : null;
+      if (accountKey) {
+        setTouchRevealedAccounts((current) => current.includes(accountKey) ? current : [...current, accountKey]);
+      }
     }
 
     function finish(event: TouchEvent) {
@@ -399,6 +408,8 @@ export function AppShell({
           <button className="mobile-sidebar-scrim" type="button" aria-label="Close folders" onClick={closeMobileSidebar} />
         ) : null}
         <Sidebar
+          key={user.id}
+          userID={user.id}
           mailboxes={mailboxes}
           csrf={csrf}
           latestSyncRun={latestSyncRun}
@@ -418,6 +429,7 @@ export function AppShell({
           mobileOpen={mobileSidebarOpen}
           dragActive={messageDragActive}
           touchDropID={touchDropID}
+          touchRevealedAccounts={touchRevealedAccounts}
           onClose={closeMobileSidebar}
         />
         <main className="content">
@@ -505,6 +517,11 @@ function touchDropTargetAt(x: number, y: number): TouchDropTarget | null {
     name: target.dataset.rolltopDropMailboxName || "Folder",
     accountID: Number.isFinite(accountID) && accountID > 0 ? accountID : 0
   };
+}
+
+function touchAccountKeyAt(x: number, y: number): string | null {
+  const target = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-rolltop-drop-account-key]");
+  return target?.dataset.rolltopDropAccountKey || null;
 }
 
 function touchPreviewAt(x: number, y: number, count: number): TouchDragPreview {
@@ -748,6 +765,7 @@ function Topbar({
 // Sidebar turns flat mailbox summaries into a tree, supports folder navigation,
 // and accepts dragged message IDs from the message list.
 function Sidebar({
+  userID,
   mailboxes,
   csrf,
   latestSyncRun,
@@ -767,8 +785,10 @@ function Sidebar({
   mobileOpen,
   dragActive,
   touchDropID,
+  touchRevealedAccounts,
   onClose
 }: {
+  userID: number;
   mailboxes: Mailbox[];
   csrf: string;
   latestSyncRun: SyncRun | null;
@@ -788,10 +808,13 @@ function Sidebar({
   mobileOpen: boolean;
   dragActive: boolean;
   touchDropID: number | null;
+  touchRevealedAccounts: string[];
   onClose: () => void;
 }) {
   const [dropID, setDropID] = useState<number | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+  const [collapsedAccounts, setCollapsedAccounts] = useState<Set<string>>(() => loadCollapsedAccounts(userID));
+  const [dragRevealedAccounts, setDragRevealedAccounts] = useState<Set<string>>(() => new Set());
   const uptimeLabel = useServerUptimeLabel(serverStartedAt, serverUptimeSeconds);
   const releaseLabel = buildDisplayLabel(buildVersion, buildDate, buildLabel);
   const uptimeParts = [uptimeLabel ? `Up ${uptimeLabel}` : "", releaseLabel].filter(Boolean);
@@ -807,8 +830,14 @@ function Sidebar({
   const advertiseAndroidApp = shouldAdvertiseAndroidApp();
 
   useEffect(() => {
-    if (!dragActive) setDropID(null);
+    if (dragActive) return;
+    setDropID(null);
+    setDragRevealedAccounts((current) => current.size > 0 ? new Set() : current);
   }, [dragActive]);
+
+  useEffect(() => {
+    saveCollapsedAccounts(userID, collapsedAccounts);
+  }, [userID, collapsedAccounts]);
 
   function open(event: MouseEvent, url: string) {
     event.preventDefault();
@@ -890,6 +919,30 @@ function Sidebar({
       else next.add(key);
       return next;
     });
+  }
+
+  function setAccountCollapsed(key: string, collapsed: boolean) {
+    setCollapsedAccounts((current) => {
+      if (current.has(key) === collapsed) return current;
+      const next = new Set(current);
+      if (collapsed) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  // Dragging over a collapsed account reveals its folders for the length of the
+  // drag only, so an incidental pass over a header never rewrites the saved layout.
+  function revealAccountForDrag(key: string) {
+    setDragRevealedAccounts((current) => current.has(key) ? current : new Set(current).add(key));
+  }
+
+  // Collapse is the stored preference; the active mailbox and an in-flight drag
+  // reveal a group for display without touching what the user saved.
+  function accountCollapsed(group: SidebarAccountGroup): boolean {
+    if (!collapsedAccounts.has(group.key)) return false;
+    if (dragRevealedAccounts.has(group.key) || touchRevealedAccounts.includes(group.key)) return false;
+    return !group.folders.some((node) => nodeContainsMailbox(node, activeMailbox));
   }
 
   function folderLink(mailbox: Mailbox, label = mailbox.name, depth = 0) {
@@ -988,12 +1041,30 @@ function Sidebar({
       <span className="folder-name"><Icon name="clock" weight={snoozedActive ? "bold" : undefined} />Snoozed</span>
     </a>
         <div className="side-section">Folders</div>
-        {accountGroups.map((group) => (
-          <div className="account-folder-group" key={group.key}>
-            <div className="account-section">{group.label}</div>
-            {group.folders.map((node) => folderNode(node))}
-          </div>
-        ))}
+        {accountGroups.map((group) => {
+          const collapsed = accountCollapsed(group);
+          const unread = collapsed ? folderTreeUnreadCount(group.folders) : 0;
+          return (
+            <div className="account-folder-group" key={group.key}>
+              <button
+                type="button"
+                className="account-toggle"
+                aria-expanded={!collapsed}
+                title={collapsed ? "Expand account folders" : "Collapse account folders"}
+                data-rolltop-drop-account-key={group.key}
+                onClick={() => setAccountCollapsed(group.key, !collapsed)}
+                onDragEnter={(event) => {
+                  if (collapsed && canAcceptDraggedMessages(event)) revealAccountForDrag(group.key);
+                }}
+              >
+                <Icon name={collapsed ? "chevron_right" : "expand_more"} />
+                <span className="account-toggle-label">{group.label}</span>
+                {unread > 0 ? <span className="folder-count">{unread.toLocaleString()}</span> : null}
+              </button>
+              {collapsed ? null : group.folders.map((node) => folderNode(node))}
+            </div>
+          );
+        })}
         <div className="side-section">Address Book</div>
         <a
           href="/contacts"

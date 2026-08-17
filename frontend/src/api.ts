@@ -29,6 +29,7 @@ import type {
   User
 } from "./types";
 import { clearMailSnapshots, clearOtherMailSnapshots, loadMailSnapshot, saveMailSnapshot } from "./lib/mailSnapshot";
+import { clearOtherCollapsedAccounts } from "./lib/sidebarLocal";
 
 /** Error thrown for non-2xx API responses after the JSON error payload is decoded. */
 export class ApiError extends Error {
@@ -270,6 +271,7 @@ function retainMailCacheForUser(userID: number) {
     if (match && Number(match[1]) !== userID) getCache.delete(key);
   }
   clearOtherMailSnapshots(userID);
+  clearOtherCollapsedAccounts(userID);
 }
 
 

@@ -188,9 +188,12 @@
     padding-bottom: 12px;
   }
 
-  .side-section,
-  .account-section {
+  .side-section {
     display: block;
+  }
+
+  .account-toggle {
+    min-height: 34px;
   }
 
   .folder,

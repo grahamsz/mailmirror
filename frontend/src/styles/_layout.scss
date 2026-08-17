@@ -540,11 +540,32 @@
   letter-spacing: .04em;
 }
 
-.account-section {
-  @include truncate;
+.account-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-height: 0;
+  margin-bottom: 2px;
+  padding: 3px 10px 3px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
   color: var(--muted);
   font-size: 12px;
-  padding: 0 12px 6px;
+  text-align: left;
+
+  &:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+
+  .account-toggle-label {
+    @include truncate;
+    flex: 1;
+    min-width: 0;
+  }
 }
 
 .account-folder-group + .account-folder-group {

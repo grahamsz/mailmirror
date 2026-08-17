@@ -5,12 +5,13 @@ package plugins
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"rolltop/backend/logging"
 )
 
 var manifestIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -93,7 +94,7 @@ func LoadManifests(root string) ([]Manifest, error) {
 			return nil, fmt.Errorf("%s: %w", manifestPath, err)
 		}
 		out = append(out, manifest)
-		log.Printf("debug plugin manifest loaded plugin_id=%s dir=%s backend=%s frontend=%t themes=%d migrations=%d", manifest.ID, manifest.Dir, manifestBackendKind(manifest), manifest.Frontend != nil, len(manifest.Themes), len(manifest.Migrations))
+		logging.Debugf("plugin manifest loaded plugin_id=%s dir=%s backend=%s frontend=%t themes=%d migrations=%d", manifest.ID, manifest.Dir, manifestBackendKind(manifest), manifest.Frontend != nil, len(manifest.Themes), len(manifest.Migrations))
 	}
 	return out, nil
 }

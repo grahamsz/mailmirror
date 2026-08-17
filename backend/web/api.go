@@ -108,6 +108,12 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 func (s *Server) requireAPIAuth(w http.ResponseWriter, r *http.Request) (currentUser, bool) {
 	cu, ok := current(r)
 	if !ok {
+		if sessionLookupFailed(r) {
+			// The session cookie could not be checked against the store;
+			// answering 401 here would read as a forced logout in the client.
+			writeAPIError(w, http.StatusServiceUnavailable, "session lookup temporarily unavailable, retry shortly")
+			return currentUser{}, false
+		}
 		writeAPIError(w, http.StatusUnauthorized, "login required")
 		return currentUser{}, false
 	}

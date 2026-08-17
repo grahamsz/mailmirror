@@ -27,6 +27,7 @@ import (
 	"rolltop/backend/blob"
 	"rolltop/backend/config"
 	"rolltop/backend/imapclient"
+	"rolltop/backend/logging"
 	"rolltop/backend/plugins"
 	"rolltop/backend/search"
 	"rolltop/backend/smtpclient"
@@ -312,6 +313,11 @@ func run() error {
 		_ = server.Shutdown(shutdownCtx)
 		return err
 	}
+	logging.SetDebug(cfg.LogLevel == "debug")
+	// Name the resolved storage paths before anything opens them, so a
+	// misconfigured deployment (volume mounted somewhere Rolltop does not
+	// write) is visible in the first lines of the container log.
+	log.Printf("rolltop storage data_dir=%s db=%s index=%s", cfg.DataDir, cfg.DatabasePath, cfg.IndexPath)
 	lock, err := acquireInstanceLock(cfg.DataDir)
 	if err != nil {
 		startup.fail(err)

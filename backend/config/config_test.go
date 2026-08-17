@@ -54,3 +54,30 @@ func TestLoadUsesRolltopPluginDir(t *testing.T) {
 		t.Fatalf("plugin dir = %q", cfg.PluginDir)
 	}
 }
+
+func TestLoadValidatesLogLevel(t *testing.T) {
+	t.Setenv("ROLLTOP_MASTER_KEY", testMasterKey)
+	t.Setenv("ROLLTOP_LOG_LEVEL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogLevel != "info" {
+		t.Fatalf("default log level = %q", cfg.LogLevel)
+	}
+
+	t.Setenv("ROLLTOP_LOG_LEVEL", "Debug")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Fatalf("log level = %q", cfg.LogLevel)
+	}
+
+	t.Setenv("ROLLTOP_LOG_LEVEL", "verbose")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for unknown log level")
+	}
+}

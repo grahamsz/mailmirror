@@ -53,9 +53,14 @@ export ROLLTOP_INBOX_POLL_INTERVAL="1m"
 export ROLLTOP_BLOB_RETENTION="336h"
 export ROLLTOP_COOKIE_SECURE="false"
 export ROLLTOP_WEBHOOK_TOKEN=""
+export ROLLTOP_LOG_LEVEL="info"
 ```
 
 Set `ROLLTOP_COOKIE_SECURE=true` when serving over HTTPS.
+
+`ROLLTOP_LOG_LEVEL` defaults to `info`, which hides verbose `debug ...` log
+lines (plugin loading, one-click unsubscribe traces). Set it to `debug` to
+include them.
 
 ## Run Locally
 

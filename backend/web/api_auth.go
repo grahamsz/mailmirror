@@ -4,6 +4,7 @@ package web
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -13,12 +14,21 @@ import (
 	"rolltop/backend/store"
 )
 
+// errSessionUnavailable marks a bootstrap that could not resolve the caller's
+// session because of a store failure; serving it with user:null would make the
+// client drop a valid login.
+var errSessionUnavailable = errors.New("session lookup temporarily unavailable")
+
 func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
 		return
 	}
 	resp, err := s.bootstrapPayload(w, r)
+	if errors.Is(err, errSessionUnavailable) {
+		sessionUnavailable(w)
+		return
+	}
 	if err != nil {
 		s.serverError(w, err)
 		return
@@ -28,9 +38,23 @@ func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) bootstrapPayload(w http.ResponseWriter, r *http.Request) (map[string]any, error) {
+	cu, authenticated := current(r)
+	if !authenticated && sessionLookupFailed(r) {
+		return nil, errSessionUnavailable
+	}
+	// A resolved session already proves users exist; query the store only for
+	// anonymous requests so a CountUsers hiccup cannot fail a signed-in load.
+	usersExist := authenticated
+	if !authenticated {
+		var err error
+		usersExist, err = s.usersExist(r.Context())
+		if err != nil {
+			return nil, err
+		}
+	}
 	info := buildinfo.Current()
 	resp := map[string]any{
-		"users_exist":           s.usersExist(r.Context()),
+		"users_exist":           usersExist,
 		"csrf":                  s.csrfToken(w, r),
 		"server_started_at":     timeString(s.startedAt),
 		"server_uptime_seconds": int(time.Since(s.startedAt).Seconds()),
@@ -43,7 +67,7 @@ func (s *Server) bootstrapPayload(w http.ResponseWriter, r *http.Request) (map[s
 		"frontend_plugins":      s.frontendPlugins(r.Context()),
 		"auth_providers":        s.authProviders(r.Context()),
 	}
-	if cu, ok := current(r); ok {
+	if authenticated {
 		resp["user"] = safeUser(cu.User)
 		swipePreferences, err := s.store.GetSwipePreferences(r.Context(), cu.User.ID)
 		if err != nil {
@@ -135,7 +159,12 @@ func (s *Server) apiSetup(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	if s.usersExist(r.Context()) {
+	usersExist, err := s.usersExist(r.Context())
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if usersExist {
 		writeAPIError(w, http.StatusConflict, "setup is already complete")
 		return
 	}
@@ -161,6 +190,7 @@ func (s *Server) apiSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := s.store.CreateUser(r.Context(), in.Email, in.Name, hash, true)
 	if err != nil {
+		log.Printf("setup create admin user: %v", err)
 		writeAPIError(w, http.StatusBadRequest, "Could not create admin user.")
 		return
 	}
@@ -180,7 +210,12 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	if !s.usersExist(r.Context()) {
+	usersExist, err := s.usersExist(r.Context())
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if !usersExist {
 		writeAPIError(w, http.StatusPreconditionRequired, "setup is required")
 		return
 	}
@@ -195,6 +230,12 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := s.store.GetUserByEmail(r.Context(), in.Email)
+	if err != nil && !store.IsNotFound(err) {
+		// A store failure is not a credential verdict; reporting it as
+		// "invalid password" sends users into password resets during outages.
+		s.serverError(w, err)
+		return
+	}
 	if err != nil {
 		writeAPIError(w, http.StatusUnauthorized, "Invalid email or password.")
 		return

@@ -30,6 +30,7 @@ type Config struct {
 	InboxPollInterval time.Duration
 	BlobRetention     time.Duration
 	WebhookToken      string
+	LogLevel          string
 }
 
 // Load reads environment configuration, applies defaults, and validates values needed before services start.
@@ -67,6 +68,12 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	logLevel := strings.ToLower(env("ROLLTOP_LOG_LEVEL", "info"))
+	switch logLevel {
+	case "info", "debug":
+	default:
+		return Config{}, fmt.Errorf("ROLLTOP_LOG_LEVEL must be \"info\" or \"debug\", got %q", logLevel)
+	}
 
 	return Config{
 		Addr:              env("ROLLTOP_ADDR", ":8080"),
@@ -81,6 +88,7 @@ func Load() (Config, error) {
 		InboxPollInterval: inboxPollInterval,
 		BlobRetention:     blobRetention,
 		WebhookToken:      os.Getenv("ROLLTOP_WEBHOOK_TOKEN"),
+		LogLevel:          logLevel,
 	}, nil
 }
 

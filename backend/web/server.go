@@ -122,6 +122,11 @@ type contextKey string
 
 const userContextKey contextKey = "current-user"
 
+// sessionErrorContextKey carries a session-lookup store failure through the
+// request so that only routes which actually need the session answer 503;
+// static assets, login, setup, and logout keep working during a store outage.
+const sessionErrorContextKey contextKey = "session-lookup-error"
+
 type currentUser struct {
 	User         store.User
 	SessionHash  string
@@ -408,9 +413,24 @@ func (s *Server) withCurrentUser(next http.Handler) http.Handler {
 		if err == nil && cookie.Value != "" {
 			hash := mmcrypto.TokenHash(cookie.Value)
 			sess, user, err := s.store.GetSessionUser(r.Context(), hash)
-			if err == nil {
+			switch {
+			case err == nil:
 				cu := currentUser{User: user, SessionHash: sess.TokenHash, SessionToken: cookie.Value}
 				r = r.WithContext(context.WithValue(r.Context(), userContextKey, cu))
+			case store.IsNotFound(err):
+				// Missing or expired session row: genuinely signed out.
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				// The client abandoned the request mid-lookup; stay anonymous
+				// without logging so ordinary tab closes do not read like
+				// store failures.
+			default:
+				// A store failure (busy database under heavy sync, disk
+				// pressure) must not demote a valid session to anonymous:
+				// that turns every route into 401 "login required" and forces
+				// a spurious logout. Record it so session-dependent routes
+				// answer 503 while assets, login, and logout still work.
+				log.Printf("session lookup failed: %v", err)
+				r = r.WithContext(context.WithValue(r.Context(), sessionErrorContextKey, err))
 			}
 		}
 		next.ServeHTTP(w, r)
@@ -422,6 +442,18 @@ func current(r *http.Request) (currentUser, bool) {
 	return cu, ok
 }
 
+// sessionLookupFailed reports whether this request carried a session cookie
+// that could not be resolved because of a store failure (as opposed to a
+// missing or expired session).
+func sessionLookupFailed(r *http.Request) bool {
+	_, failed := r.Context().Value(sessionErrorContextKey).(error)
+	return failed
+}
+
+func sessionUnavailable(w http.ResponseWriter) {
+	http.Error(w, "session lookup temporarily unavailable, retry shortly", http.StatusServiceUnavailable)
+}
+
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -431,12 +463,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	if !s.usersExist(r.Context()) {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
-		return
-	}
-	if _, ok := current(r); !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+	if _, ok := s.requireAuth(w, r); !ok {
 		return
 	}
 	http.Redirect(w, r, "/mail", http.StatusSeeOther)
@@ -959,16 +986,28 @@ func (s *Server) loginUser(w http.ResponseWriter, r *http.Request, userID int64)
 }
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) (currentUser, bool) {
-	if !s.usersExist(r.Context()) {
+	// A resolved session already proves users exist; skip the CountUsers
+	// round-trip that would otherwise run on every authenticated request.
+	if cu, ok := current(r); ok {
+		return cu, true
+	}
+	if sessionLookupFailed(r) {
+		// The session cookie could not be checked against the store; a
+		// redirect to /login here would force a spurious logout.
+		sessionUnavailable(w)
+		return currentUser{}, false
+	}
+	usersExist, err := s.usersExist(r.Context())
+	if err != nil {
+		s.serverError(w, err)
+		return currentUser{}, false
+	}
+	if !usersExist {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return currentUser{}, false
 	}
-	cu, ok := current(r)
-	if !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return currentUser{}, false
-	}
-	return cu, true
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	return currentUser{}, false
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (currentUser, bool) {
@@ -983,9 +1022,16 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (currentUs
 	return cu, true
 }
 
-func (s *Server) usersExist(ctx context.Context) bool {
+// usersExist reports whether at least one local user account exists. Callers
+// must treat an error as "unknown", never as "no users": claiming no users on
+// a transient store failure sends signed-in browsers back to the first-run
+// admin setup screen and would let /api/setup mint a fresh admin account.
+func (s *Server) usersExist(ctx context.Context) (bool, error) {
 	n, err := s.store.CountUsers(ctx)
-	return err == nil && n > 0
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func (s *Server) csrfToken(w http.ResponseWriter, r *http.Request) string {

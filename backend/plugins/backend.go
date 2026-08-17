@@ -8,13 +8,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"path/filepath"
 	goplugin "plugin"
 	"strings"
 	"sync"
 	"time"
+
+	"rolltop/backend/logging"
 )
 
 // CurrentUser is the authenticated user shape exposed to backend plugins.
@@ -545,7 +546,7 @@ func (m *BackendManager) Plugin(id string) (BackendPlugin, bool, error) {
 		return nil, true, fmt.Errorf("backend plugin %s has no binary", id)
 	}
 	binary := filepath.Join(manifest.Dir, filepath.FromSlash(manifest.Backend.Binary))
-	log.Printf("debug backend plugin module loading plugin_id=%s binary=%s", id, binary)
+	logging.Debugf("backend plugin module loading plugin_id=%s binary=%s", id, binary)
 	opened, err := goplugin.Open(binary)
 	if err != nil {
 		m.failures[id] = err.Error()
@@ -570,7 +571,7 @@ func (m *BackendManager) Plugin(id string) (BackendPlugin, bool, error) {
 	}
 	delete(m.failures, id)
 	m.loaded[id] = instance
-	log.Printf("debug backend plugin module loaded plugin_id=%s hooks=%s", id, strings.Join(backendHookNames(instance), ","))
+	logging.Debugf("backend plugin module loaded plugin_id=%s hooks=%s", id, strings.Join(backendHookNames(instance), ","))
 	return instance, true, nil
 }
 

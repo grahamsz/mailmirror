@@ -5,10 +5,11 @@ package plugins
 import (
 	"context"
 	"database/sql"
-	"log"
 	"sort"
 	"strings"
 	"sync"
+
+	"rolltop/backend/logging"
 )
 
 const (
@@ -94,7 +95,7 @@ func Register(def Definition, migrations ...Migration) {
 		}
 		registry.migrations = append(registry.migrations, migration)
 	}
-	log.Printf("debug plugin module registered plugin_id=%s migrations=%d enabled_by_default=%t heavy=%t", def.ID, len(migrations), def.EnabledByDefault, def.Heavy)
+	logging.Debugf("plugin module registered plugin_id=%s migrations=%d enabled_by_default=%t heavy=%t", def.ID, len(migrations), def.EnabledByDefault, def.Heavy)
 }
 
 // RegisterHooks adds compiled plugin hook implementations without requiring the

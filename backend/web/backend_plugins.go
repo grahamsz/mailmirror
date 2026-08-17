@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"rolltop/backend/logging"
 	"rolltop/backend/plugins"
 	"rolltop/backend/search"
 )
@@ -221,7 +222,7 @@ func (s *Server) RegisterProtectedAPI(pluginID string, route plugins.ProtectedAP
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("debug plugin protected api registered plugin_id=%s path=%s prefix=%t", strings.TrimSpace(pluginID), cleanAPIPath(route.Path), route.Prefix)
+	logging.Debugf("plugin protected api registered plugin_id=%s path=%s prefix=%t", strings.TrimSpace(pluginID), cleanAPIPath(route.Path), route.Prefix)
 	return handle, nil
 }
 
@@ -230,7 +231,7 @@ func (s *Server) RegisterPublicAPI(pluginID string, route plugins.PublicAPIRoute
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("debug plugin public api registered plugin_id=%s path=%s prefix=%t", strings.TrimSpace(pluginID), cleanAPIPath(route.Path), route.Prefix)
+	logging.Debugf("plugin public api registered plugin_id=%s path=%s prefix=%t", strings.TrimSpace(pluginID), cleanAPIPath(route.Path), route.Prefix)
 	return handle, nil
 }
 
@@ -296,17 +297,19 @@ func (s *Server) startBackendPlugin(ctx context.Context, pluginID string) (plugi
 	if !ok || plugin == nil {
 		return nil, false, nil
 	}
-	log.Printf("debug backend plugin starting plugin_id=%s", pluginID)
+	logging.Debugf("backend plugin starting plugin_id=%s", pluginID)
 	if err := plugin.Start(s); err != nil {
 		_ = plugin.Stop(s)
 		unregistered := s.protectedAPIRouteRegistry().unregisterPlugin(pluginID)
 		unregistered += s.publicAPIRouteRegistry().unregisterPlugin(pluginID)
 		s.recordBackendPluginFailure(pluginID, err)
-		log.Printf("debug backend plugin start failed plugin_id=%s routes_unregistered=%d error=%v", pluginID, unregistered, err)
+		// Start failures must reach the operator log even at the default log
+		// level: the admin UI may still show the plugin as enabled.
+		log.Printf("backend plugin start failed plugin_id=%s routes_unregistered=%d error=%v", pluginID, unregistered, err)
 		return nil, true, err
 	}
 	s.startedBackendPlugins[pluginID] = plugin
-	log.Printf("debug backend plugin started plugin_id=%s", pluginID)
+	logging.Debugf("backend plugin started plugin_id=%s", pluginID)
 	return plugin, true, nil
 }
 
@@ -328,16 +331,16 @@ func (s *Server) stopBackendPlugin(pluginID string) error {
 func (s *Server) stopBackendPluginInstance(pluginID string, plugin plugins.BackendPlugin) error {
 	var stopErr error
 	if plugin != nil {
-		log.Printf("debug backend plugin stopping plugin_id=%s", pluginID)
+		logging.Debugf("backend plugin stopping plugin_id=%s", pluginID)
 		stopErr = plugin.Stop(s)
 		if stopErr != nil {
-			log.Printf("debug backend plugin stop failed plugin_id=%s error=%v", pluginID, stopErr)
+			log.Printf("backend plugin stop failed plugin_id=%s error=%v", pluginID, stopErr)
 		}
 	}
 	unregistered := s.protectedAPIRouteRegistry().unregisterPlugin(pluginID)
 	unregistered += s.publicAPIRouteRegistry().unregisterPlugin(pluginID)
 	if plugin != nil || unregistered > 0 {
-		log.Printf("debug backend plugin stopped plugin_id=%s routes_unregistered=%d", pluginID, unregistered)
+		logging.Debugf("backend plugin stopped plugin_id=%s routes_unregistered=%d", pluginID, unregistered)
 	}
 	return stopErr
 }

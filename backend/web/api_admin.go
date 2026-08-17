@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"rolltop/backend/auth"
+	"rolltop/backend/logging"
 	"rolltop/backend/plugins"
 	"rolltop/backend/store"
 )
@@ -241,7 +242,7 @@ func (s *Server) apiAdminPlugin(w http.ResponseWriter, r *http.Request, rest str
 		return
 	}
 	defer s.notifyPluginSettingChanged(users)
-	log.Printf("debug plugin setting updated plugin_id=%s enabled=%t", pluginID, in.Enabled)
+	logging.Debugf("plugin setting updated plugin_id=%s enabled=%t", pluginID, in.Enabled)
 	if in.Enabled {
 		if _, _, err := s.startBackendPlugin(r.Context(), pluginID); err != nil {
 			log.Printf("backend plugin %s enabled but unavailable: %v", pluginID, err)

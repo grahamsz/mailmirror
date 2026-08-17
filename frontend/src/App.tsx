@@ -12,6 +12,7 @@ import { AppShell } from "./features/layout/AppShell";
 import { ComposeOverlay } from "./features/compose/ComposeViews";
 import { RouteView } from "./RouteView";
 import { messageFromError } from "./lib/errors";
+import { messageCountLabel } from "./lib/format";
 import { currentLocation, messageURL } from "./lib/routes";
 import { androidNativeAvailable, androidPushSubscription, registerAndroidPush, unregisterAndroidPush } from "./lib/androidNative";
 import { serverBuildIdentity, serverShellDiffers } from "./lib/shellFreshness";
@@ -719,14 +720,14 @@ export default function App() {
         });
       }
       const verb = copying ? "Copying" : "Moving";
-      const toastID = addToast(`${verb} ${ids.length.toLocaleString()} ${ids.length === 1 ? "message" : "messages"} to ${mailbox.name}...`, "loading");
+      const toastID = addToast(`${verb} ${messageCountLabel(ids.length)} to ${mailbox.name}...`, "loading");
       try {
         if (copying) {
           const data = await api.bulkCopyMessages(bootstrap.csrf, ids, mailbox.id);
           if (data.queued) {
-            updateToast(toastID, `Copy task started for ${ids.length.toLocaleString()} messages.`, "success");
+            updateToast(toastID, `Copy task started for ${messageCountLabel(ids.length)}.`, "success");
           } else {
-            updateToast(toastID, `Copied ${(data.copied || ids.length).toLocaleString()} ${ids.length === 1 ? "message" : "messages"} to ${mailbox.name}.`, "success");
+            updateToast(toastID, `Copied ${messageCountLabel(data.copied ?? ids.length)} to ${mailbox.name}.`, "success");
           }
           return;
         }
@@ -734,9 +735,9 @@ export default function App() {
           ? await api.moveMessage(bootstrap.csrf, ids[0], mailbox.id).then((res) => ({ ...res, queued: false, moved: 1 }))
           : await api.bulkMoveMessages(bootstrap.csrf, ids, mailbox.id);
         if (data.queued) {
-          updateToast(toastID, `Move task started for ${ids.length.toLocaleString()} messages.`, "success");
+          updateToast(toastID, `Move task started for ${messageCountLabel(ids.length)}.`, "success");
         } else {
-          updateToast(toastID, `Moved ${(data.moved || ids.length).toLocaleString()} ${ids.length === 1 ? "message" : "messages"} to ${mailbox.name}.`, "success");
+          updateToast(toastID, `Moved ${messageCountLabel(data.moved ?? ids.length)} to ${mailbox.name}.`, "success");
         }
       } catch (err) {
         if (!copying) {

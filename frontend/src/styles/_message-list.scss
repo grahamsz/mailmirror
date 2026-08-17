@@ -50,6 +50,10 @@
   gap: 7px;
 }
 
+.selection-actions {
+  flex-wrap: wrap;
+}
+
 .selection-action-summary {
   min-width: 0;
 
@@ -99,6 +103,16 @@
 
   span {
     color: inherit;
+  }
+}
+
+.selection-action-bar .selection-delete {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger);
+
+  &:hover:not(:disabled) {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   }
 }
 

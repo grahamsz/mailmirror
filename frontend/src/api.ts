@@ -143,16 +143,32 @@ export async function putJSON<T>(url: string, csrf: string, body: unknown = {}, 
 }
 
 /** DELETE JSON from a mutating endpoint with the current CSRF token. */
-export async function deleteJSON<T>(url: string, csrf: string): Promise<T> {
+export async function deleteJSON<T>(url: string, csrf: string, options: MutationRequestOptions = {}): Promise<T> {
   return parse<T>(
     await fetch(url, {
       method: "DELETE",
       headers: {
         Accept: "application/json",
         "X-CSRF-Token": csrf
-      }
+      },
+      ...(options.keepalive ? { keepalive: true } : {})
     })
   );
+}
+
+// The backend caps bulk message endpoints at 1000 IDs per request. Larger
+// batches are split here and dispatched together so every caller inherits the
+// limit, and so background (keepalive) commits hand all requests to the
+// browser before the page can unload.
+export const bulkMessageIDLimit = 1000;
+
+function chunkMessageIDs(ids: number[]): number[][] {
+  if (ids.length <= bulkMessageIDLimit) return [ids];
+  const chunks: number[][] = [];
+  for (let start = 0; start < ids.length; start += bulkMessageIDLimit) {
+    chunks.push(ids.slice(start, start + bulkMessageIDLimit));
+  }
+  return chunks;
 }
 
 /** DELETE JSON with a request body for endpoints keyed by payload rather than path. */
@@ -295,8 +311,8 @@ export const api = {
   snoozes: (page: number) => getJSON<SnoozeListResponse>(`/api/snoozes?${new URLSearchParams({ page: String(page) })}`),
   snoozeMessage: (csrf: string, id: number, until: Date, options?: MutationRequestOptions) =>
     putJSON<{ ok: boolean; snoozed: boolean; snooze: MessageSnooze }>(`/api/messages/${id}/snooze`, csrf, { until: until.toISOString() }, options),
-  unsnoozeMessage: (csrf: string, id: number) =>
-    deleteJSON<{ ok: boolean; snoozed: boolean }>(`/api/messages/${id}/snooze`, csrf),
+  unsnoozeMessage: (csrf: string, id: number, options?: MutationRequestOptions) =>
+    deleteJSON<{ ok: boolean; snoozed: boolean }>(`/api/messages/${id}/snooze`, csrf, options),
   search: (query: string, page: number) =>
     getJSON<{ conversations: Conversation[]; page: number; has_prev: boolean; has_next: boolean }>(searchListURL(query, page)),
   prefetchSearch: (query: string, page: number) =>
@@ -341,18 +357,39 @@ export const api = {
     postJSON<{ ok: boolean; message: { id: number; is_starred: boolean } }>(`/api/messages/${id}/star`, csrf, { starred }),
   moveMessage: (csrf: string, id: number, mailboxID: number, options?: MutationRequestOptions) =>
     postJSON<{ ok: boolean; mailbox: string }>(`/api/messages/${id}/move`, csrf, { mailbox_id: mailboxID }, options),
-  bulkMoveMessages: (csrf: string, ids: number[], mailboxID: number, options?: MutationRequestOptions) =>
-    postJSON<{ ok: boolean; queued: boolean; moved?: number; run_id?: number; mailbox: string }>("/api/messages/bulk-move", csrf, {
-      message_ids: ids,
-      mailbox_id: mailboxID
-    }, options),
-  bulkCopyMessages: (csrf: string, ids: number[], mailboxID: number) =>
-    postJSON<{ ok: boolean; queued: boolean; copied?: number; run_id?: number; mailbox: string }>("/api/messages/bulk-copy", csrf, {
-      message_ids: ids,
-      mailbox_id: mailboxID
-    }),
-  bulkRead: (csrf: string, ids: number[], read: boolean, options?: MutationRequestOptions) =>
-    postJSON<{ ok: boolean; updated: number }>("/api/messages/bulk-read", csrf, { ids, read }, options),
+  bulkMoveMessages: async (csrf: string, ids: number[], mailboxID: number, options?: MutationRequestOptions) => {
+    const results = await Promise.all(chunkMessageIDs(ids).map((chunk) =>
+      postJSON<{ ok: boolean; queued: boolean; moved?: number; run_id?: number; mailbox: string }>("/api/messages/bulk-move", csrf, {
+        message_ids: chunk,
+        mailbox_id: mailboxID
+      }, options)));
+    return results.reduce((merged, data) => ({
+      ok: merged.ok && data.ok,
+      queued: merged.queued || data.queued,
+      moved: (merged.moved || 0) + (data.moved || 0),
+      run_id: data.run_id ?? merged.run_id,
+      mailbox: data.mailbox || merged.mailbox
+    }));
+  },
+  bulkCopyMessages: async (csrf: string, ids: number[], mailboxID: number) => {
+    const results = await Promise.all(chunkMessageIDs(ids).map((chunk) =>
+      postJSON<{ ok: boolean; queued: boolean; copied?: number; run_id?: number; mailbox: string }>("/api/messages/bulk-copy", csrf, {
+        message_ids: chunk,
+        mailbox_id: mailboxID
+      })));
+    return results.reduce((merged, data) => ({
+      ok: merged.ok && data.ok,
+      queued: merged.queued || data.queued,
+      copied: (merged.copied || 0) + (data.copied || 0),
+      run_id: data.run_id ?? merged.run_id,
+      mailbox: data.mailbox || merged.mailbox
+    }));
+  },
+  bulkRead: async (csrf: string, ids: number[], read: boolean, options?: MutationRequestOptions) => {
+    const results = await Promise.all(chunkMessageIDs(ids).map((chunk) =>
+      postJSON<{ ok: boolean; updated: number }>("/api/messages/bulk-read", csrf, { ids: chunk, read }, options)));
+    return results.reduce((merged, data) => ({ ok: merged.ok && data.ok, updated: merged.updated + data.updated }));
+  },
   compose: (query: string) =>
     getJSON<{ compose: ComposeForm; compose_from: string; from_identities: ComposeIdentity[] }>(`/api/compose${query ? `?${query}` : ""}`),
   // Compose sends pure JSON when possible, then switches to multipart only when

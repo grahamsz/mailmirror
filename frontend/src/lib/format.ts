@@ -103,3 +103,8 @@ export function displaySnoozeUntil(value: string | Date, prefs?: DatePrefs, now 
     minute: "2-digit"
   }).format(date);
 }
+
+/** messageCountLabel renders "1 message" / "N messages" for move/copy/delete toasts. */
+export function messageCountLabel(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "message" : "messages"}`;
+}

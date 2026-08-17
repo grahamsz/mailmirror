@@ -11,7 +11,7 @@ import { Field, Stat } from "../../components/common";
 import { emptyAccountForm, accountToForm } from "../../lib/accountForm";
 import { messageFromError } from "../../lib/errors";
 import { displayDateTime, displayTime, formatBytes } from "../../lib/format";
-import { folderParentNames, folderTree, type FolderNode } from "../../lib/folders";
+import { folderParentNames, folderTree, trashMailboxForAccount, type FolderNode } from "../../lib/folders";
 import { effectiveMailboxSyncMode, mergeSyncRuns } from "../../lib/sync";
 import { swipeActionChoices, swipeSnoozeChoices } from "../../lib/swipeActions";
 import { pluginIDs } from "../../plugins/registry";
@@ -1250,7 +1250,7 @@ export function SettingsView({
       return;
     }
     const missingTrashAccount = trashRequired
-      ? imapAccounts.find((account) => !mailboxes.some((mailbox) => mailbox.account_id === account.id && mailbox.role === "trash"))
+      ? imapAccounts.find((account) => !trashMailboxForAccount(mailboxes, account.id))
       : undefined;
     if (missingTrashAccount) {
       addToast(`Choose a Trash folder for ${imapAccountLabel(missingTrashAccount)}.`, "error");
@@ -1903,7 +1903,7 @@ export function SettingsView({
     const trashRequired = swipeDraft.left_action === "trash" || swipeDraft.right_action === "trash";
     const trashUnavailable = trashRequired && imapAccounts.length === 0;
     const missingTrashAccounts = trashRequired
-      ? imapAccounts.filter((account) => !mailboxes.some((mailbox) => mailbox.account_id === account.id && mailbox.role === "trash"))
+      ? imapAccounts.filter((account) => !trashMailboxForAccount(mailboxes, account.id))
       : [];
     const archiveByAccount = new Map(swipeDraft.archive_mailboxes.map((item) => [item.account_id, item.mailbox_id]));
     const archiveChoices = (accountID: number) => mailboxes

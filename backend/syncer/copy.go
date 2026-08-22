@@ -53,7 +53,7 @@ func (s *Service) StartCopyMessages(ctx context.Context, userID int64, messageID
 		return store.SyncRun{}, err
 	}
 	s.notify(userID)
-	go s.runCopyMessages(context.Background(), userID, ids, destMailboxID, dest.Name, run.ID, progress, onDone)
+	go s.runCopyMessages(s.baseContextOrDefault(), userID, ids, destMailboxID, dest.Name, run.ID, progress, onDone)
 	return run, nil
 }
 
@@ -93,6 +93,12 @@ func (s *Service) runCopyMessages(ctx context.Context, userID int64, ids []int64
 		}
 		progress.CurrentMailbox = "Copying to " + destName
 		progress.CurrentUID = msg.UID
+		// A single copy can spend several minutes inside IMAP append and its
+		// reconciliation commands. Touch the row first so the stale-run reaper
+		// cannot mislabel live work between full progress writes.
+		if err := s.Store.TouchSyncRun(ctx, userID, runID); err != nil && ctx.Err() == nil {
+			log.Printf("touch copy run user_id=%d run_id=%d: %v", userID, runID, err)
+		}
 		if err := s.CopyMessage(ctx, userID, id, destMailboxID); err != nil {
 			status = "failed"
 			errText = err.Error()

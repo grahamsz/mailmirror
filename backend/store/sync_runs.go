@@ -124,6 +124,16 @@ func (s *Store) UpdateSyncRunProgress(ctx context.Context, userID, id int64, p S
 	return err
 }
 
+// TouchSyncRun refreshes only updated_at on a running run so long single-message
+// operations (IMAP append + reconcile) are not mislabeled stale by the reaper
+// while they are still actively making progress between full progress writes.
+func (s *Store) TouchSyncRun(ctx context.Context, userID, id int64) error {
+	_, err := s.mustDataDB(ctx, userID).ExecContext(ctx,
+		`UPDATE sync_runs SET updated_at = ? WHERE user_id = ? AND id = ? AND status = 'running'`,
+		nowUnix(), userID, id)
+	return err
+}
+
 // FinishSyncRun finalizes a sync run with status, progress, and optional error text.
 func (s *Store) FinishSyncRun(ctx context.Context, userID, id int64, status string, p SyncProgress, errText string) error {
 	if len(errText) > 1000 {

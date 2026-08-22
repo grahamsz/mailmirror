@@ -71,7 +71,7 @@ func (s *Service) StartMoveMessages(ctx context.Context, userID int64, messageID
 		return store.SyncRun{}, err
 	}
 	s.notify(userID)
-	go s.runMoveMessages(context.Background(), userID, ids, destMailboxID, dest.Name, run.ID, progress, onDone)
+	go s.runMoveMessages(s.baseContextOrDefault(), userID, ids, destMailboxID, dest.Name, run.ID, progress, onDone)
 	return run, nil
 }
 
@@ -110,6 +110,9 @@ func (s *Service) runMoveMessages(ctx context.Context, userID int64, ids []int64
 		}
 		progress.CurrentMailbox = "Moving to " + destName
 		progress.CurrentUID = msg.UID
+		if err := s.Store.TouchSyncRun(ctx, userID, runID); err != nil && ctx.Err() == nil {
+			log.Printf("touch move run user_id=%d run_id=%d: %v", userID, runID, err)
+		}
 		if err := s.MoveMessage(ctx, userID, id, destMailboxID); err != nil {
 			status = "failed"
 			errText = err.Error()

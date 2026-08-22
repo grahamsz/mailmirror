@@ -201,7 +201,14 @@ func (r *Runner) lockAfterSenderStats(userID int64) bool {
 	return false
 }
 
+// exclusiveWriterWaitTimeout bounds how long sync admission waits for a
+// foreground operation to release its barrier. Without a cap, one leaked
+// foreground barrier would block this user's Start forever — and because the
+// scheduler starts users serially, every user behind them.
+const exclusiveWriterWaitTimeout = 5 * time.Minute
+
 func (r *Runner) lockAfterExclusiveWriters(userID int64) bool {
+	started := time.Now()
 	for r.context().Err() == nil {
 		if !r.lockAfterSenderStats(userID) {
 			return false
@@ -212,11 +219,23 @@ func (r *Runner) lockAfterExclusiveWriters(userID int64) bool {
 		done := r.foregroundDone[userID]
 		r.mu.Unlock()
 		if done == nil {
+			if time.Since(started) >= exclusiveWriterWaitTimeout {
+				return false
+			}
 			continue
 		}
+		remaining := time.Until(started.Add(exclusiveWriterWaitTimeout))
+		if remaining <= 0 {
+			return false
+		}
+		timer := time.NewTimer(remaining)
 		select {
 		case <-done:
+			timer.Stop()
 		case <-r.context().Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
 			return false
 		}
 	}
@@ -1228,15 +1247,25 @@ func (r *Runner) BeginForegroundOperation(ctx context.Context, userID int64) (fu
 		// Return to the caller promptly, but retain the foreground barrier until
 		// canceled workers have checkpointed and handed their replay state back.
 		// Releasing it immediately can consume an incomplete replay and strand
-		// the remainder when an acquisition timeout races worker cleanup.
+		// the remainder when an acquisition timeout races worker cleanup. The
+		// wait is bounded: if a wedged worker never yields, the barrier is
+		// force-released so one stuck plugin cannot hold the tenant forever.
 		go func() {
-			_ = r.waitForForegroundYield(r.context(), userID, attachmentDone, senderStatsDone)
+			if yieldErr := r.waitForForegroundYield(r.context(), userID, attachmentDone, senderStatsDone); yieldErr != nil {
+				log.Printf("foreground barrier force-released user_id=%d error_type=%T", userID, yieldErr)
+			}
 			finish()
 		}()
 		return func() {}, err
 	}
 	return finish, nil
 }
+
+// foregroundYieldWaitTimeout bounds how long waitForForegroundYield polls for
+// resumable workers to checkpoint. Without a cap a single hung worker (for
+// example an in-process plugin ignoring its context) would keep the foreground
+// barrier — and every future sync admission behind it — permanently.
+const foregroundYieldWaitTimeout = 10 * time.Minute
 
 func (r *Runner) waitForForegroundYield(ctx context.Context, userID int64, maintenanceDone ...<-chan struct{}) error {
 	if ctx == nil {
@@ -1252,6 +1281,7 @@ func (r *Runner) waitForForegroundYield(ctx context.Context, userID int64, maint
 			return ctx.Err()
 		}
 	}
+	started := time.Now()
 	for {
 		r.mu.Lock()
 		// A recovery turn can install its cancellation after reserving its
@@ -1261,6 +1291,9 @@ func (r *Runner) waitForForegroundYield(ctx context.Context, userID int64, maint
 		r.mu.Unlock()
 		if !mailboxWriterRunning {
 			return ctx.Err()
+		}
+		if time.Since(started) >= foregroundYieldWaitTimeout {
+			return fmt.Errorf("foreground yield still blocked after %s: %w", foregroundYieldWaitTimeout, context.DeadlineExceeded)
 		}
 		timer := time.NewTimer(10 * time.Millisecond)
 		select {

@@ -30,15 +30,92 @@ const (
 	idleCycleDuration         = 29 * time.Minute
 	idleStopGrace             = 5 * time.Second
 	defaultIMAPCommandTimeout = 60 * time.Second
+
+	// DefaultMaxRawMessageBytes caps the RFC822 size rolltop mirrors in full.
+	// Larger messages are stored header-only so one hostile or bloated message
+	// can neither exhaust memory during ingest nor permanently wedge
+	// incremental sync behind a body that cannot finish downloading.
+	DefaultMaxRawMessageBytes = 50 * 1024 * 1024
+	// oversizedHeaderFetchBytes bounds the BODY.PEEK[HEADER]<0.N> partial used
+	// to keep oversized messages listable from headers alone.
+	oversizedHeaderFetchBytes = 256 * 1024
+	// Body-fetch timeouts adapt to advertised RFC822 sizes assuming this
+	// conservative throughput floor, so a legitimately slow transfer of known
+	// size gets enough wall clock instead of being killed mid-download.
+	batchBodyMinThroughput = 512 * 1024
+	minBatchBodyTimeout    = defaultIMAPCommandTimeout
+	maxBatchBodyTimeout    = 15 * time.Minute
 )
 
 var errIdleStopTimeout = errors.New("IDLE session did not stop cleanly")
+
+// MessageTooLargeError reports a message whose remote RFC822 size exceeds the
+// configured mirror limit. Hydration refuses these instead of downloading an
+// unbounded payload into memory.
+type MessageTooLargeError struct {
+	UID   uint32
+	Size  int64
+	Limit int64
+}
+
+func (e *MessageTooLargeError) Error() string {
+	return fmt.Sprintf("message UID %d is %s, exceeding the %s mirror limit",
+		e.UID, humanByteSize(e.Size), humanByteSize(e.Limit))
+}
+
+func humanByteSize(size int64) string {
+	switch {
+	case size <= 0:
+		return "unknown size"
+	case size < 1024:
+		return fmt.Sprintf("%d B", size)
+	case size < 1024*1024:
+		return fmt.Sprintf("%.1f KiB", float64(size)/1024)
+	case size < 1024*1024*1024:
+		return fmt.Sprintf("%.1f MiB", float64(size)/(1024*1024))
+	default:
+		return fmt.Sprintf("%.2f GiB", float64(size)/(1024*1024*1024))
+	}
+}
+
+// computeBatchBodyTimeout converts advertised batch byte sizes into a fetch
+// deadline. Small batches keep the plain command timeout; large transfers get
+// base + bytes/throughput clamped to maxBatchBodyTimeout.
+func computeBatchBodyTimeout(base time.Duration, sizes []int64) time.Duration {
+	if base <= 0 {
+		base = defaultIMAPCommandTimeout
+	}
+	total := int64(0)
+	for _, size := range sizes {
+		if size > 0 {
+			total += size
+		}
+	}
+	budget := time.Duration(total/batchBodyMinThroughput) * time.Second
+	timeout := base + budget
+	if timeout < minBatchBodyTimeout {
+		timeout = minBatchBodyTimeout
+	}
+	if timeout > maxBatchBodyTimeout {
+		timeout = maxBatchBodyTimeout
+	}
+	return timeout
+}
 
 // Fetcher implements syncer.Fetcher using go-imap and encrypted Rolltop account credentials.
 type Fetcher struct {
 	MasterKey []byte
 	Timeout   time.Duration
 	BatchSize uint32
+	// MaxRawMessageBytes overrides DefaultMaxRawMessageBytes when positive.
+	MaxRawMessageBytes int64
+}
+
+func (f *Fetcher) maxRawMessageBytes() int64 {
+	if f != nil && f.MaxRawMessageBytes > 0 {
+		return f.MaxRawMessageBytes
+	}
+	return DefaultMaxRawMessageBytes
 }
 
 // ServerCapabilities contains the authenticated IMAP extensions used by
@@ -562,8 +639,6 @@ func (f *Fetcher) fetchUIDs(ctx context.Context, c *client.Client, mailbox strin
 	if batchSize == 0 {
 		batchSize = 10
 	}
-	section := rawBodySection()
-	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, imap.FetchRFC822Size, imap.FetchFlags, section.FetchItem()}
 	for i := 0; i < len(uids); i += int(batchSize) {
 		select {
 		case <-ctx.Done():
@@ -575,53 +650,47 @@ func (f *Fetcher) fetchUIDs(ctx context.Context, c *client.Client, mailbox strin
 			end = len(uids)
 		}
 		requested := uids[i:end]
-		seqset := new(imap.SeqSet)
-		seqset.AddNum(requested...)
-		messages := make(chan *imap.Message, 20)
-		done := make(chan error, 1)
-		go func() {
-			done <- guardedUIDFetch(ctx, c, seqset, items, messages)
-		}()
-		fetched := make([]syncer.FetchedMessage, 0, len(requested))
-		var readErr error
-		for msg := range messages {
-			if msg == nil {
+
+		// Phase 1: metadata only. Advertised RFC822 sizes drive both the
+		// oversized split and the adaptive body-fetch deadline below, so no
+		// body bytes are read before their size is known.
+		meta, metaErr := f.fetchBatchMetadata(ctx, c, mailbox, requested)
+		if metaErr != nil {
+			return metaErr
+		}
+
+		// Phase 2: messages above the mirror limit are fetched header-only and
+		// stored as metadata rows so the UID checkpoint can advance past them.
+		var bodyUIDs []uint32
+		for _, uid := range requested {
+			m := meta[uid]
+			if m == nil || m.size <= f.maxRawMessageBytes() {
+				bodyUIDs = append(bodyUIDs, uid)
 				continue
 			}
-			body := msg.GetBody(section)
-			if body == nil {
-				continue
-			}
-			raw, err := io.ReadAll(body)
+			stubs, err := f.fetchOversizedStubs(ctx, c, mailbox, []uint32{uid}, meta)
 			if err != nil {
-				if readErr == nil {
-					readErr = fmt.Errorf("read message body mailbox %q UID %d: %w", mailbox, msg.Uid, err)
-				}
-				continue
+				return err
 			}
-			fetched = append(fetched, syncer.FetchedMessage{
-				Mailbox:      mailbox,
-				UID:          msg.Uid,
-				InternalDate: msg.InternalDate,
-				Size:         int64(msg.Size),
-				Flags:        msg.Flags,
-				Raw:          raw,
-			})
+			for _, stub := range stubs {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := handle(stub); err != nil {
+					return fmt.Errorf("store oversized message mailbox %q UID %d: %w", mailbox, stub.UID, err)
+				}
+			}
 		}
-		if err := <-done; err != nil {
-			return fmt.Errorf("fetch mailbox %q UID batch %s: %w", mailbox, describeBatch(requested), err)
+		if len(bodyUIDs) == 0 {
+			continue
 		}
-		if readErr != nil {
-			return readErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		ordered, err := orderFetchedUIDBatch(requested, fetched)
-		if err != nil {
-			return fmt.Errorf("fetch mailbox %q UID batch %s: %w", mailbox, describeBatch(requested), err)
-		}
-		for _, message := range ordered {
+
+		// Phase 3: full bodies for everything within the size limit.
+		fetched, bodyErr := f.fetchBodiesForUIDs(ctx, c, mailbox, bodyUIDs, meta)
+		for _, message := range fetched {
+			// Persist whatever completed before a transport failure so the
+			// durable checkpoint advances and the next pass re-fetches only
+			// the remainder.
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -629,15 +698,220 @@ func (f *Fetcher) fetchUIDs(ctx context.Context, c *client.Client, mailbox strin
 				return fmt.Errorf("store message mailbox %q UID %d: %w", mailbox, message.UID, err)
 			}
 		}
+		if bodyErr != nil {
+			return bodyErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+type uidFetchMetadata struct {
+	size         int64
+	internalDate time.Time
+	flags        []string
+}
+
+// drainUnreadFetchSections consumes any body-section literals the server sent
+// for a FETCH response that the caller did not read. Leaving them unread would
+// desynchronize the connection stream before the next command.
+func drainUnreadFetchSections(msg *imap.Message, consumed io.Reader) {
+	if msg == nil {
+		return
+	}
+	for _, literal := range msg.Body {
+		if literal == nil {
+			continue
+		}
+		if consumed != nil && io.Reader(literal) == consumed {
+			continue
+		}
+		_, _ = io.Copy(io.Discard, literal)
+	}
+}
+
+func (f *Fetcher) fetchBatchMetadata(ctx context.Context, c *client.Client, mailbox string, requested []uint32) (map[uint32]*uidFetchMetadata, error) {
+	seqset := new(imap.SeqSet)
+	seqset.AddNum(requested...)
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, imap.FetchRFC822Size, imap.FetchFlags}
+	messages := make(chan *imap.Message, 20)
+	done := make(chan error, 1)
+	go func() {
+		done <- guardedUIDFetch(ctx, c, seqset, items, messages, f.commandTimeout())
+	}()
+	out := make(map[uint32]*uidFetchMetadata, len(requested))
+	for msg := range messages {
+		if msg == nil || msg.Uid == 0 {
+			drainUnreadFetchSections(msg, nil)
+			continue
+		}
+		out[msg.Uid] = &uidFetchMetadata{
+			size:         int64(msg.Size),
+			internalDate: msg.InternalDate,
+			flags:        msg.Flags,
+		}
+		drainUnreadFetchSections(msg, nil)
+	}
+	if err := <-done; err != nil {
+		return nil, fmt.Errorf("fetch metadata mailbox %q UID batch %s: %w", mailbox, describeBatch(requested), err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// fetchOversizedStubs downloads only the leading header block for UIDs whose
+// advertised size exceeded the mirror limit. Missing headers degrade to an
+// empty body rather than failing the whole run; sync still records the row so
+// the incremental checkpoint can advance past the un-mirrorable UID.
+func (f *Fetcher) fetchOversizedStubs(ctx context.Context, c *client.Client, mailbox string, requested []uint32, meta map[uint32]*uidFetchMetadata) ([]syncer.FetchedMessage, error) {
+	if len(requested) == 0 {
+		return nil, nil
+	}
+	section := &imap.BodySectionName{
+		Peek:    true,
+		Partial: []int{0, oversizedHeaderFetchBytes},
+	}
+	section.BodyPartName.Specifier = imap.HeaderSpecifier
+	items := []imap.FetchItem{imap.FetchUid, section.FetchItem()}
+	seqset := new(imap.SeqSet)
+	seqset.AddNum(requested...)
+	messages := make(chan *imap.Message, 20)
+	done := make(chan error, 1)
+	go func() {
+		done <- guardedUIDFetch(ctx, c, seqset, items, messages, f.commandTimeout())
+	}()
+	headers := make(map[uint32][]byte)
+	for msg := range messages {
+		if msg == nil || msg.Uid == 0 {
+			drainUnreadFetchSections(msg, nil)
+			continue
+		}
+		body := msg.GetBody(section)
+		if body == nil {
+			drainUnreadFetchSections(msg, nil)
+			continue
+		}
+		raw, err := io.ReadAll(io.LimitReader(body, oversizedHeaderFetchBytes))
+		if err != nil && len(raw) == 0 {
+			drainUnreadFetchSections(msg, body)
+			continue
+		}
+		drainUnreadFetchSections(msg, body)
+		headers[msg.Uid] = raw
+	}
+	if err := <-done; err != nil {
+		log.Printf("oversized header fetch degraded mailbox %q UID batch %s: %v", mailbox, describeBatch(requested), err)
+	}
+	stubs := make([]syncer.FetchedMessage, 0, len(requested))
+	for _, uid := range requested {
+		m := meta[uid]
+		stub := syncer.FetchedMessage{
+			Mailbox:   mailbox,
+			UID:       uid,
+			Raw:       headers[uid],
+			Oversized: true,
+		}
+		if m != nil {
+			stub.InternalDate = m.internalDate
+			stub.Size = m.size
+			stub.Flags = m.flags
+		}
+		stubs = append(stubs, stub)
+	}
+	return stubs, ctx.Err()
+}
+
+// fetchBodiesForUIDs downloads full bodies for one batch with a size-adaptive
+// deadline. Bodies that arrive larger than the mirror limit (a server that
+// misreports RFC822.SIZE) are skipped with a log instead of being stored or
+// allowed to balloon memory.
+func (f *Fetcher) fetchBodiesForUIDs(ctx context.Context, c *client.Client, mailbox string, requested []uint32, meta map[uint32]*uidFetchMetadata) ([]syncer.FetchedMessage, error) {
+	if len(requested) == 0 {
+		return nil, nil
+	}
+	section := rawBodySection()
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, imap.FetchRFC822Size, imap.FetchFlags, section.FetchItem()}
+	seqset := new(imap.SeqSet)
+	seqset.AddNum(requested...)
+
+	sizes := make([]int64, 0, len(requested))
+	for _, uid := range requested {
+		if m := meta[uid]; m != nil {
+			sizes = append(sizes, m.size)
+		}
+	}
+
+	limit := f.maxRawMessageBytes()
+	fetched := make([]syncer.FetchedMessage, 0, len(requested))
+	var tooLarge []uint32
+	var readErr error
+
+	messages := make(chan *imap.Message, 20)
+	done := make(chan error, 1)
+	go func() {
+		done <- guardedUIDFetch(ctx, c, seqset, items, messages, computeBatchBodyTimeout(f.commandTimeout(), sizes))
+	}()
+	for msg := range messages {
+		if msg == nil {
+			continue
+		}
+		body := msg.GetBody(section)
+		if body == nil {
+			drainUnreadFetchSections(msg, nil)
+			continue
+		}
+		raw, err := io.ReadAll(io.LimitReader(body, limit+1))
+		if err != nil {
+			drainUnreadFetchSections(msg, body)
+			if readErr == nil {
+				readErr = fmt.Errorf("read message body mailbox %q UID %d: %w", mailbox, msg.Uid, err)
+			}
+			continue
+		}
+		drainUnreadFetchSections(msg, body)
+		if int64(len(raw)) > limit {
+			tooLarge = append(tooLarge, msg.Uid)
+			continue
+		}
+		fetched = append(fetched, syncer.FetchedMessage{
+			Mailbox:      mailbox,
+			UID:          msg.Uid,
+			InternalDate: msg.InternalDate,
+			Size:         int64(msg.Size),
+			Flags:        msg.Flags,
+			Raw:          raw,
+		})
+	}
+	if err := <-done; err != nil {
+		return fetched, fmt.Errorf("fetch mailbox %q UID batch %s: %w", mailbox, describeBatch(requested), err)
+	}
+	for _, uid := range tooLarge {
+		log.Printf("skipping message larger than reported size mailbox %q user_limit=%d uid=%d", mailbox, limit, uid)
+	}
+	if readErr != nil {
+		return fetched, readErr
+	}
+	if err := ctx.Err(); err != nil {
+		return fetched, err
+	}
+	ordered, err := orderFetchedUIDBatch(requested, fetched, tooLarge)
+	if err != nil {
+		return fetched, fmt.Errorf("fetch mailbox %q UID batch %s: %w", mailbox, describeBatch(requested), err)
+	}
+	return ordered, nil
 }
 
 // guardedUIDFetch prevents go-imap's absolute command deadline from remaining
 // armed while fetched messages are parsed, stored, and indexed. The dependency
 // has no context-aware command API, so cancellation closes the connection to
-// unblock an active fetch.
-func guardedUIDFetch(ctx context.Context, c *client.Client, seqset *imap.SeqSet, items []imap.FetchItem, messages chan *imap.Message) error {
+// unblock an active fetch. An explicit timeout overrides the fetcher default;
+// body batches pass a size-adaptive value so large known transfers are not
+// terminated mid-download (which previously livelocked incremental sync).
+func guardedUIDFetch(ctx context.Context, c *client.Client, seqset *imap.SeqSet, items []imap.FetchItem, messages chan *imap.Message, timeout time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		close(messages)
 		return err
@@ -651,7 +925,10 @@ func guardedUIDFetch(ctx context.Context, c *client.Client, seqset *imap.SeqSet,
 	c.Timeout = 0
 	defer func() { c.Timeout = previousTimeout }()
 
-	commandTimeout := previousTimeout
+	commandTimeout := timeout
+	if commandTimeout <= 0 {
+		commandTimeout = previousTimeout
+	}
 	if commandTimeout <= 0 {
 		commandTimeout = defaultIMAPCommandTimeout
 	}
@@ -673,12 +950,16 @@ func guardedUIDFetch(ctx context.Context, c *client.Client, seqset *imap.SeqSet,
 	return err
 }
 
-func orderFetchedUIDBatch(requested []uint32, fetched []syncer.FetchedMessage) ([]syncer.FetchedMessage, error) {
+func orderFetchedUIDBatch(requested []uint32, fetched []syncer.FetchedMessage, allowedMissing []uint32) ([]syncer.FetchedMessage, error) {
 	wanted := make(map[uint32]bool, len(requested))
 	for _, uid := range requested {
 		if uid != 0 {
 			wanted[uid] = true
 		}
+	}
+	missing := make(map[uint32]bool, len(allowedMissing))
+	for _, uid := range allowedMissing {
+		missing[uid] = true
 	}
 	byUID := make(map[uint32]syncer.FetchedMessage, len(fetched))
 	for _, message := range fetched {
@@ -691,17 +972,20 @@ func orderFetchedUIDBatch(requested []uint32, fetched []syncer.FetchedMessage) (
 		byUID[message.UID] = message
 	}
 	ordered := make([]syncer.FetchedMessage, 0, len(requested))
-	missing := make([]uint32, 0)
+	unexpected := make([]uint32, 0)
 	for _, uid := range requested {
 		message, ok := byUID[uid]
 		if !ok {
-			missing = append(missing, uid)
+			if missing[uid] {
+				continue
+			}
+			unexpected = append(unexpected, uid)
 			continue
 		}
 		ordered = append(ordered, message)
 	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("IMAP server omitted requested UID batch %s", describeBatch(missing))
+	if len(unexpected) > 0 {
+		return nil, fmt.Errorf("IMAP server omitted requested UID batch %s", describeBatch(unexpected))
 	}
 	return ordered, nil
 }
@@ -726,7 +1010,8 @@ func normalizeUIDList(uids []uint32) []uint32 {
 }
 
 // FetchMessage retrieves one raw message body for on-demand thread hydration or
-// attachment download when the local blob has been pruned.
+// attachment download when the local blob has been pruned. Messages above the
+// mirror limit are refused before any body bytes are read.
 func (f *Fetcher) FetchMessage(ctx context.Context, account store.MailAccount, mailbox string, uid uint32) (syncer.FetchedMessage, error) {
 	select {
 	case <-ctx.Done():
@@ -748,14 +1033,25 @@ func (f *Fetcher) FetchMessage(ctx context.Context, account store.MailAccount, m
 	if selected == nil || selected.UidValidity == 0 {
 		return syncer.FetchedMessage{}, fmt.Errorf("select mailbox %q returned no UIDVALIDITY", mailbox)
 	}
-	section := rawBodySection()
-	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, imap.FetchRFC822Size, imap.FetchFlags, section.FetchItem()}
+
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(uid)
+
+	meta, err := f.fetchSingleMetadata(ctx, c, mailbox, uid)
+	if err != nil {
+		return syncer.FetchedMessage{}, err
+	}
+	limit := f.maxRawMessageBytes()
+	if meta.size > limit {
+		return syncer.FetchedMessage{}, &MessageTooLargeError{UID: uid, Size: meta.size, Limit: limit}
+	}
+
+	section := rawBodySection()
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, imap.FetchRFC822Size, imap.FetchFlags, section.FetchItem()}
 	messages := make(chan *imap.Message, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- c.UidFetch(seqset, items, messages)
+		done <- guardedUIDFetch(ctx, c, seqset, items, messages, computeBatchBodyTimeout(f.commandTimeout(), []int64{meta.size}))
 	}()
 	var out syncer.FetchedMessage
 	found := false
@@ -772,9 +1068,12 @@ func (f *Fetcher) FetchMessage(ctx context.Context, account store.MailAccount, m
 		if body == nil {
 			continue
 		}
-		raw, err := io.ReadAll(body)
+		raw, err := io.ReadAll(io.LimitReader(body, limit+1))
 		if err != nil {
 			return syncer.FetchedMessage{}, fmt.Errorf("read message body mailbox %q UID %d: %w", mailbox, uid, err)
+		}
+		if int64(len(raw)) > limit {
+			return syncer.FetchedMessage{}, &MessageTooLargeError{UID: uid, Size: int64(len(raw)), Limit: limit}
 		}
 		out = syncer.FetchedMessage{
 			Mailbox:      mailbox,
@@ -792,6 +1091,33 @@ func (f *Fetcher) FetchMessage(ctx context.Context, account store.MailAccount, m
 	}
 	if !found {
 		return syncer.FetchedMessage{}, fmt.Errorf("message not found mailbox %q UID %d", mailbox, uid)
+	}
+	return out, nil
+}
+
+func (f *Fetcher) fetchSingleMetadata(ctx context.Context, c *client.Client, mailbox string, uid uint32) (uidFetchMetadata, error) {
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, imap.FetchRFC822Size, imap.FetchFlags}
+	seqset := new(imap.SeqSet)
+	seqset.AddNum(uid)
+	messages := make(chan *imap.Message, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- guardedUIDFetch(ctx, c, seqset, items, messages, f.commandTimeout())
+	}()
+	var out uidFetchMetadata
+	found := false
+	for msg := range messages {
+		if msg == nil || msg.Uid != uid {
+			continue
+		}
+		out = uidFetchMetadata{size: int64(msg.Size), internalDate: msg.InternalDate, flags: msg.Flags}
+		found = true
+	}
+	if err := <-done; err != nil {
+		return uidFetchMetadata{}, fmt.Errorf("fetch metadata mailbox %q UID %d: %w", mailbox, uid, err)
+	}
+	if !found {
+		return uidFetchMetadata{}, fmt.Errorf("message not found mailbox %q UID %d", mailbox, uid)
 	}
 	return out, nil
 }

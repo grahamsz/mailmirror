@@ -220,7 +220,9 @@ func TestFetchUIDsDoesNotApplyCommandDeadlineToMessageHandler(t *testing.T) {
 			return
 		}
 		reader := bufio.NewReader(serverConn)
-		for i, uid := range []uint32{1, 2} {
+		// Ingestion issues two UID FETCH commands per message: metadata
+		// (RFC822.SIZE) first, then the body fetch sized from that metadata.
+		for i, uid := range []uint32{1, 1, 2, 2} {
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				serverDone <- err
@@ -234,7 +236,7 @@ func TestFetchUIDsDoesNotApplyCommandDeadlineToMessageHandler(t *testing.T) {
 			raw := []byte(fmt.Sprintf("Subject: UID %d\r\n\r\nbody", uid))
 			if _, err := fmt.Fprintf(serverConn,
 				"* %d FETCH (UID %d INTERNALDATE \"16-Jul-2026 00:00:00 +0000\" RFC822.SIZE %d FLAGS () BODY[] {%d}\r\n",
-				i+1, uid, len(raw), len(raw)); err != nil {
+				i/2+1, uid, len(raw), len(raw)); err != nil {
 				serverDone <- err
 				return
 			}
@@ -317,7 +319,7 @@ func TestGuardedUIDFetchHonorsConfiguredCommandTimeout(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	err = guardedUIDFetch(ctx, c, seqset, []imap.FetchItem{imap.FetchUid, rawBodySection().FetchItem()}, messages)
+	err = guardedUIDFetch(ctx, c, seqset, []imap.FetchItem{imap.FetchUid, rawBodySection().FetchItem()}, messages, 0)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("guardedUIDFetch() error = %v, want context deadline exceeded", err)
 	}
@@ -483,7 +485,7 @@ func (f *fakeCapabilitySupporter) Support(capability string) (bool, error) {
 
 func TestOrderFetchedUIDBatchSortsServerResponses(t *testing.T) {
 	fetched := []syncer.FetchedMessage{{UID: 9}, {UID: 3}, {UID: 7}}
-	got, err := orderFetchedUIDBatch([]uint32{3, 7, 9}, fetched)
+	got, err := orderFetchedUIDBatch([]uint32{3, 7, 9}, fetched, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +495,7 @@ func TestOrderFetchedUIDBatchSortsServerResponses(t *testing.T) {
 }
 
 func TestOrderFetchedUIDBatchRejectsMissingUIDBeforeDelivery(t *testing.T) {
-	got, err := orderFetchedUIDBatch([]uint32{3, 7, 9}, []syncer.FetchedMessage{{UID: 9}, {UID: 3}})
+	got, err := orderFetchedUIDBatch([]uint32{3, 7, 9}, []syncer.FetchedMessage{{UID: 9}, {UID: 3}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "UID batch 7") {
 		t.Fatalf("missing UID error = %v", err)
 	}
@@ -503,11 +505,11 @@ func TestOrderFetchedUIDBatchRejectsMissingUIDBeforeDelivery(t *testing.T) {
 }
 
 func TestOrderFetchedUIDBatchIgnoresUnsolicitedUIDAndRejectsDuplicates(t *testing.T) {
-	got, err := orderFetchedUIDBatch([]uint32{3}, []syncer.FetchedMessage{{UID: 99}, {UID: 3}})
+	got, err := orderFetchedUIDBatch([]uint32{3}, []syncer.FetchedMessage{{UID: 99}, {UID: 3}}, nil)
 	if err != nil || len(got) != 1 || got[0].UID != 3 {
 		t.Fatalf("unsolicited UID result = %#v, %v", got, err)
 	}
-	if _, err := orderFetchedUIDBatch([]uint32{3}, []syncer.FetchedMessage{{UID: 3}, {UID: 3}}); err == nil {
+	if _, err := orderFetchedUIDBatch([]uint32{3}, []syncer.FetchedMessage{{UID: 3}, {UID: 3}}, nil); err == nil {
 		t.Fatal("duplicate requested UID was accepted")
 	}
 }
@@ -898,5 +900,58 @@ func TestSyncDestinationSessionHonorsCancelledContext(t *testing.T) {
 	session := &SyncDestinationSession{}
 	if _, _, err := session.FindMessageBySyncMarker(ctx, "v1.task.0000000001.0000000002"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("FindMessageBySyncMarker() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestComputeBatchBodyTimeoutScalesWithSizeAndClamps(t *testing.T) {
+	if got := computeBatchBodyTimeout(0, nil); got != minBatchBodyTimeout {
+		t.Fatalf("empty batch timeout = %s, want floor %s", got, minBatchBodyTimeout)
+	}
+	small := []int64{1024}
+	if got := computeBatchBodyTimeout(30*time.Second, small); got != minBatchBodyTimeout {
+		t.Fatalf("small batch timeout = %s, want raised floor %s", got, minBatchBodyTimeout)
+	}
+	// 512KiB/s assumed throughput: 512MiB needs ~1024s on top of the base.
+	big := []int64{512 * 1024 * 1024}
+	if got := computeBatchBodyTimeout(60*time.Second, big); got != maxBatchBodyTimeout {
+		t.Fatalf("huge batch timeout = %s, want cap %s", got, maxBatchBodyTimeout)
+	}
+	mid := []int64{10 * 1024 * 1024} // 20s of budget at 512KiB/s
+	if got := computeBatchBodyTimeout(60*time.Second, mid); got != 80*time.Second {
+		t.Fatalf("mid batch timeout = %s, want base+budget", got)
+	}
+}
+
+func TestOrderFetchedUIDBatchToleratesAllowedMissing(t *testing.T) {
+	got, err := orderFetchedUIDBatch(
+		[]uint32{3, 7, 9},
+		[]syncer.FetchedMessage{{UID: 3}, {UID: 9}},
+		[]uint32{7},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].UID != 3 || got[1].UID != 9 {
+		t.Fatalf("ordered UIDs = %#v, want [3 9] with 7 skipped", got)
+	}
+}
+
+func TestMessageTooLargeErrorNamesSizes(t *testing.T) {
+	err := &MessageTooLargeError{UID: 12, Size: 60 * 1024 * 1024, Limit: 50 * 1024 * 1024}
+	msg := err.Error()
+	if !strings.Contains(msg, "60.0 MiB") || !strings.Contains(msg, "50.0 MiB") {
+		t.Fatalf("error text %q lacks human sizes", msg)
+	}
+}
+
+func TestFetcherMaxRawMessageBytesDefaultsAndOverrides(t *testing.T) {
+	if got := (*Fetcher)(nil).maxRawMessageBytes(); got != DefaultMaxRawMessageBytes {
+		t.Fatalf("nil fetcher limit = %d", got)
+	}
+	if got := (&Fetcher{}).maxRawMessageBytes(); got != DefaultMaxRawMessageBytes {
+		t.Fatalf("default limit = %d", got)
+	}
+	if got := (&Fetcher{MaxRawMessageBytes: 1024}).maxRawMessageBytes(); got != 1024 {
+		t.Fatalf("configured limit = %d", got)
 	}
 }

@@ -229,7 +229,7 @@ func (r Resolver) lookupLogoURL(ctx context.Context, domain string) (string, err
 		if logoURL == "" {
 			return "", errors.New("BIMI record has no logo URL")
 		}
-		if err := validateLogoURL(ctx, resolver, logoURL); err != nil {
+		if err := validateLogoURLWithResolver(ctx, resolver, logoURL); err != nil {
 			return "", err
 		}
 		return logoURL, nil
@@ -246,8 +246,24 @@ func (r Resolver) fetchSVG(ctx context.Context, rawURL string) (string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 8 * time.Second}
 	}
-	originalCheck := client.CheckRedirect
+	// The URL string is validated pre-dial by validateLogoURL (and per redirect
+	// below), but the transport re-resolves DNS at dial time. Validating the
+	// resolved IP again inside DialContext closes the rebinding window where a
+	// second lookup returns a private address.
 	clientCopy := *client
+	if clientCopy.Transport == nil {
+		clientCopy.Transport = http.DefaultTransport
+	}
+	baseTransport, ok := clientCopy.Transport.(*http.Transport)
+	if ok {
+		transport := baseTransport.Clone()
+		transport.Proxy = nil
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			return safeDialContext(ctx, resolver, network, address)
+		}
+		clientCopy.Transport = transport
+	}
+	originalCheck := clientCopy.CheckRedirect
 	clientCopy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if originalCheck != nil {
 			if err := originalCheck(req, via); err != nil {
@@ -257,7 +273,7 @@ func (r Resolver) fetchSVG(ctx context.Context, rawURL string) (string, error) {
 		if len(via) >= 5 {
 			return errors.New("too many BIMI logo redirects")
 		}
-		return validateLogoURL(req.Context(), resolver, req.URL.String())
+		return validateLogoURLWithResolver(req.Context(), resolver, req.URL.String())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -307,6 +323,10 @@ func parseBIMITXT(record string) map[string]string {
 }
 
 func validateLogoURL(ctx context.Context, resolver *net.Resolver, rawURL string) error {
+	return validateLogoURLWithResolver(ctx, resolver, rawURL)
+}
+
+func validateLogoURLWithResolver(ctx context.Context, resolver *net.Resolver, rawURL string) error {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return err
@@ -340,6 +360,39 @@ func validateLogoURL(ctx context.Context, resolver *net.Resolver, rawURL string)
 	return nil
 }
 
+// safeDialContext resolves the target once and only dials addresses that pass
+// publicIP validation at dial time. This is the same defense the remote-image
+// fetcher uses: a hostile DNS answer that flips to a private address between
+// URL validation and connection never reaches the network.
+func safeDialContext(ctx context.Context, resolver *net.Resolver, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var firstErr error
+	dialer := &net.Dialer{Timeout: 8 * time.Second}
+	for _, candidate := range ips {
+		if !publicIP(candidate.IP) {
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return nil, errors.New("BIMI logo host resolves only to private addresses")
+}
+
 func validateSVG(svg string) error {
 	lower := strings.ToLower(svg)
 	if !strings.Contains(lower, "<svg") {
@@ -366,12 +419,27 @@ func publicIP(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
-	return !ip.IsLoopback() &&
-		!ip.IsPrivate() &&
-		!ip.IsUnspecified() &&
-		!ip.IsLinkLocalMulticast() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsMulticast()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		switch {
+		case v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127:
+			// CGNAT 100.64.0.0/10.
+			return false
+		case v4[0] == 198 && (v4[1] == 18 || v4[1] == 19):
+			// Benchmarking 198.18.0.0/15.
+			return false
+		case v4[0] == 255:
+			// Limited broadcast.
+			return false
+		case v4[0] == 0:
+			// "This network" range beyond the unspecified address.
+			return false
+		}
+	}
+	return true
 }
 
 func domainFromEmail(value string) string {

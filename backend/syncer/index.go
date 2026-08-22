@@ -55,6 +55,14 @@ func (s *Service) storeFetchedMessage(ctx context.Context, userID int64, account
 	if date.IsZero() {
 		date = item.InternalDate
 	}
+	if item.Oversized {
+		// Only the leading header block exists locally. Keep the row listable
+		// and searchable by subject/from, but never persist a partial body as
+		// if it were the real message.
+		parsed.Text = oversizedMessageBodyText(item.Size)
+		parsed.HTML = ""
+		parsed.Files = nil
+	}
 	fingerprint := store.MessageArrivalFingerprint(item.Raw, parsed.MessageID, item.InternalDate, item.Size)
 
 	rawHash := sha256Hex(item.Raw)
@@ -62,7 +70,7 @@ func (s *Service) storeFetchedMessage(ctx context.Context, userID int64, account
 	blobRecordPath := remoteMessagePath(userID, account.ID, item.Mailbox, item.UID, rawHash)
 	blobKind := "message-remote"
 	blobSize := int64(0)
-	if s.shouldRetainBlob(date) {
+	if !item.Oversized && s.shouldRetainBlob(date) {
 		generationRecoveryPhase(ctx, "blob-save", "")
 		saved, err := s.Blobs.SaveRawMessage(userID, account.ID, item.Mailbox, item.UID, item.Raw)
 		if err != nil {
@@ -790,5 +798,26 @@ func (s *Service) ReconcileMailboxSearchIndex(ctx context.Context, userID, mailb
 				return err
 			}
 		}
+	}
+}
+
+// oversizedMessageBodyText is the placeholder preview stored for messages whose
+// remote size exceeded the mirror limit. Only their headers are kept locally.
+func oversizedMessageBodyText(size int64) string {
+	return fmt.Sprintf("[Message too large to mirror locally (%s). It is listed from headers only; read it in your mail provider's webmail.]", humanBytes(size))
+}
+
+func humanBytes(size int64) string {
+	switch {
+	case size <= 0:
+		return "unknown size"
+	case size < 1024:
+		return fmt.Sprintf("%d B", size)
+	case size < 1024*1024:
+		return fmt.Sprintf("%.1f KiB", float64(size)/1024)
+	case size < 1024*1024*1024:
+		return fmt.Sprintf("%.1f MiB", float64(size)/(1024*1024))
+	default:
+		return fmt.Sprintf("%.2f GiB", float64(size)/(1024*1024*1024))
 	}
 }

@@ -81,6 +81,14 @@ func (s *Service) repairMailboxSearchRemotePage(
 			}
 			continue
 		}
+		if s.MaxMessageBytes > 0 && msg.Size > s.MaxMessageBytes {
+			// Oversized messages were never mirrored in full; remote hydration
+			// would be refused, so publish the header-derived fallback now.
+			if err := fallback(msg); err != nil {
+				return false, err
+			}
+			continue
+		}
 		if msg.UserID != userID || msg.AccountID != account.ID || msg.MailboxID != mailbox.ID || msg.UID == 0 {
 			return false, store.ErrNotFound
 		}

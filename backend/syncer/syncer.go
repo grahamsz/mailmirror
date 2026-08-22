@@ -114,6 +114,11 @@ type FetchedMessage struct {
 	Size                   int64
 	Flags                  []string
 	Raw                    []byte
+	// Oversized marks messages whose remote RFC822 size exceeded the mirror
+	// limit. Raw holds only the leading header block; callers must persist
+	// metadata without a local raw blob and must not attempt full-body
+	// hydration for them.
+	Oversized bool
 }
 
 // Fetcher is the narrow IMAP boundary used by sync. Keeping this interface here
@@ -166,6 +171,14 @@ type Service struct {
 	AllowBackgroundAttachmentHydration bool
 	PluginDir                          string
 	MasterKey                          []byte
+	// BaseContext is the process-lifetime context used by detached background
+	// work (large copies/moves) so shutdown cancellation reaches them. When
+	// unset these operations fall back to context.Background().
+	BaseContext context.Context
+	// MaxMessageBytes mirrors the fetcher's mirror limit so derived workers
+	// (search-index repair hydration) can skip oversized rows locally instead
+	// of attempting remote hydration that is guaranteed to be refused.
+	MaxMessageBytes int64
 
 	pluginOnce     sync.Once
 	pluginLoadErr  error
@@ -184,6 +197,14 @@ const (
 	inlineMetadataSyncLimit               = 10000
 	mailboxGenerationBlobCleanupBatchSize = 25
 )
+
+// baseContextOrDefault is the context detached background operations run under.
+func (s *Service) baseContextOrDefault() context.Context {
+	if s != nil && s.BaseContext != nil {
+		return s.BaseContext
+	}
+	return context.Background()
+}
 
 func (s *Service) initBackendPlugins() error {
 	if s == nil {

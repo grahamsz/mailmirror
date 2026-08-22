@@ -99,7 +99,7 @@ func TestActiveWriterStallSurvivesCallerCancellation(t *testing.T) {
 		`bleve active writer stalled operation="index-batch"`,
 		`user_id=17 account_id=4 mailbox_id=34 documents=1`,
 		`first_document_id=912 last_document_id=912 document_ids=[912]`,
-		`marker_written=true restart_required=true`,
+		`marker_written=true marker_error_type=<nil>`,
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("stall diagnostics missing %q: %q", want, output)

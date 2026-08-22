@@ -708,24 +708,31 @@ func (s *Service) watchActiveWriter(done <-chan struct{}, details bleveErrorCont
 		}
 	}
 
+	// The durable marker is best-effort: if the database write fails (disk
+	// full, DB locked by a wedged writer), restart remains the recovery path
+	// because it clears the in-process writer gate and reopens the index.
+	// Skipping the restart just because the marker could not be written used
+	// to leave this tenant's writer owned forever with no self-healing.
 	markerErr := s.MarkSearchIndexRecoveryRequired(details.UserID)
-	if markerErr == nil {
-		s.activeStallOnce.Do(func() {
-			s.mu.Lock()
-			handler := s.activeStallHandler
-			s.mu.Unlock()
-			if handler != nil {
-				handler(details.UserID)
-			}
-		})
+	if markerErr != nil {
+		time.Sleep(time.Second)
+		markerErr = s.MarkSearchIndexRecoveryRequired(details.UserID)
 	}
+	s.activeStallOnce.Do(func() {
+		s.mu.Lock()
+		handler := s.activeStallHandler
+		s.mu.Unlock()
+		if handler != nil {
+			handler(details.UserID)
+		}
+	})
 	logger := log.Printf
 	if s.bleveErrorLog != nil {
 		logger = s.bleveErrorLog
 	}
-	logger("bleve active writer stalled operation=%q user_id=%d account_id=%d mailbox_id=%d documents=%d batch_bytes=%d first_document_id=%d last_document_id=%d document_ids=%v threshold=%s marker_written=%t restart_required=%t marker_error_type=%T marker_error=%v",
+	logger("bleve active writer stalled operation=%q user_id=%d account_id=%d mailbox_id=%d documents=%d batch_bytes=%d first_document_id=%d last_document_id=%d document_ids=%v threshold=%s marker_written=%t marker_error_type=%T marker_error=%v",
 		details.Operation, details.UserID, details.AccountID, details.MailboxID, details.Documents, details.BatchBytes,
-		details.FirstDocumentID, details.LastDocumentID, details.DocumentIDs, s.activeWriterStallAfter(), markerErr == nil, markerErr == nil, markerErr, markerErr)
+		details.FirstDocumentID, details.LastDocumentID, details.DocumentIDs, s.activeWriterStallAfter(), markerErr == nil, markerErr, markerErr)
 	if stack := filteredBleveBatchStack(); stack != "" {
 		logger("bleve active writer stack user_id=%d operation=%q\n%s", details.UserID, details.Operation, stack)
 	}

@@ -41,6 +41,20 @@ const (
 	maxOfficeSearchTextBytes = 1024 * 1024
 	pdfExtractionTimeout     = 10 * time.Second
 	officeExtractionTimeout  = 10 * time.Second
+	// maxMIMEDepth bounds multipart recursion. Each level costs a goroutine
+	// stack frame plus reader state, so attacker-crafted nesting hundreds of
+	// levels deep could otherwise exhaust memory or overflow the stack (a
+	// fatal, unrecoverable process crash).
+	maxMIMEDepth = 20
+	// maxDecodedPartBytes caps one leaf part's decoded size. Ingest caps the
+	// whole message well below this; the cap is defense-in-depth for the
+	// on-demand display path reading stored blobs.
+	maxDecodedPartBytes = 128 * 1024 * 1024
+	// maxBodyTextBytes/maxBodyHTMLBytes bound accumulated body text so
+	// thousands of tiny text parts (or one giant one) cannot grow the parsed
+	// representation without limit.
+	maxBodyTextBytes = 4 * 1024 * 1024
+	maxBodyHTMLBytes = 4 * 1024 * 1024
 )
 
 var (
@@ -143,7 +157,7 @@ func Parse(raw []byte) (ParsedMessage, error) {
 	if d, err := mail.ParseDate(msg.Header.Get("Date")); err == nil {
 		parsed.Date = d.UTC()
 	}
-	if err := parsePart(textproto.MIMEHeader(msg.Header), msg.Body, &parsed); err != nil {
+	if err := parsePart(textproto.MIMEHeader(msg.Header), msg.Body, &parsed, 0); err != nil {
 		if isTolerableEOF(err) {
 			parsed.Text = cleanIndexedText(parsed.Text)
 			return parsed, nil
@@ -162,7 +176,7 @@ func ParseDisplayBody(r io.Reader) (string, string, error) {
 		return "", "", err
 	}
 	var parsed ParsedMessage
-	if err := parseDisplayPart(textproto.MIMEHeader(msg.Header), msg.Body, &parsed); err != nil {
+	if err := parseDisplayPart(textproto.MIMEHeader(msg.Header), msg.Body, &parsed, 0); err != nil {
 		if isTolerableEOF(err) {
 			return normalizeDisplayText(parsed.Text), parsed.HTML, nil
 		}
@@ -171,16 +185,32 @@ func ParseDisplayBody(r io.Reader) (string, string, error) {
 	return normalizeDisplayText(parsed.Text), parsed.HTML, nil
 }
 
+// appendBounded appends add to current, truncating at limit bytes. The cut may
+// split a UTF-8 sequence; callers that need valid text sanitize afterwards.
+func appendBounded(current, add string, limit int) string {
+	if limit <= 0 || len(current) >= limit {
+		return current
+	}
+	if len(current)+len(add) > limit {
+		add = add[:limit-len(current)]
+	}
+	return current + add
+}
+
 // parsePart recursively walks the MIME tree for indexing. Attachments keep their
 // decoded data long enough for search extraction; text/html parts feed the message
-// body fields used for search and previews.
-func parsePart(header textproto.MIMEHeader, body io.Reader, parsed *ParsedMessage) error {
+// body fields used for search and previews. Recursion depth is capped so hostile
+// nesting cannot exhaust memory or the goroutine stack; deeper subtrees are skipped.
+func parsePart(header textproto.MIMEHeader, body io.Reader, parsed *ParsedMessage, depth int) error {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || mediaType == "" {
 		mediaType = "text/plain"
 	}
 	if strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		if depth >= maxMIMEDepth {
+			return nil
+		}
 		mr := multipart.NewReader(body, params["boundary"])
 		for {
 			part, err := mr.NextPart()
@@ -193,7 +223,7 @@ func parsePart(header textproto.MIMEHeader, body io.Reader, parsed *ParsedMessag
 			if err != nil {
 				return err
 			}
-			if err := parsePart(part.Header, part, parsed); err != nil {
+			if err := parsePart(part.Header, part, parsed, depth+1); err != nil {
 				if isTolerableEOF(err) {
 					return nil
 				}
@@ -202,7 +232,7 @@ func parsePart(header textproto.MIMEHeader, body io.Reader, parsed *ParsedMessag
 		}
 	}
 
-	decoded, err := io.ReadAll(decodeTransfer(header, body))
+	decoded, err := io.ReadAll(io.LimitReader(decodeTransfer(header, body), maxDecodedPartBytes+1))
 	if err != nil {
 		if isTolerableEOF(err) {
 			decoded = bytes.TrimSpace(decoded)
@@ -232,14 +262,17 @@ func parsePart(header textproto.MIMEHeader, body io.Reader, parsed *ParsedMessag
 
 	switch strings.ToLower(mediaType) {
 	case "text/plain":
-		parsed.Text += "\n" + decodeTextBytes(decoded, params["charset"])
+		parsed.Text = appendBounded(parsed.Text, "\n"+decodeTextBytes(decoded, params["charset"]), maxBodyTextBytes)
 	case "text/html":
 		htmlText := decodeTextBytes(decoded, params["charset"])
+		if len(htmlText) > maxBodyHTMLBytes {
+			htmlText = htmlText[:maxBodyHTMLBytes]
+		}
 		if strings.TrimSpace(parsed.HTML) == "" {
 			parsed.HTML = htmlText
 		}
 		if strings.TrimSpace(parsed.Text) == "" {
-			parsed.Text += "\n" + stripHTML(htmlText)
+			parsed.Text = appendBounded(parsed.Text, "\n"+stripHTML(htmlText), maxBodyTextBytes)
 		}
 	}
 	return nil
@@ -260,7 +293,8 @@ func isInlineMIMEFile(disposition, mediaType, contentID string) bool {
 
 // parseDisplayPart mirrors parsePart but discards attachment streams immediately,
 // avoiding unnecessary memory use when the caller only needs renderable body text.
-func parseDisplayPart(header textproto.MIMEHeader, body io.Reader, parsed *ParsedMessage) error {
+// Recursion depth is capped identically to parsePart.
+func parseDisplayPart(header textproto.MIMEHeader, body io.Reader, parsed *ParsedMessage, depth int) error {
 	contentType := header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || mediaType == "" {
@@ -268,6 +302,9 @@ func parseDisplayPart(header textproto.MIMEHeader, body io.Reader, parsed *Parse
 	}
 	lowerMediaType := strings.ToLower(mediaType)
 	if strings.HasPrefix(lowerMediaType, "multipart/") {
+		if depth >= maxMIMEDepth {
+			return nil
+		}
 		mr := multipart.NewReader(body, params["boundary"])
 		for {
 			part, err := mr.NextPart()
@@ -280,7 +317,7 @@ func parseDisplayPart(header textproto.MIMEHeader, body io.Reader, parsed *Parse
 			if err != nil {
 				return err
 			}
-			if err := parseDisplayPart(part.Header, part, parsed); err != nil {
+			if err := parseDisplayPart(part.Header, part, parsed, depth+1); err != nil {
 				if isTolerableEOF(err) {
 					return nil
 				}
@@ -301,11 +338,11 @@ func parseDisplayPart(header textproto.MIMEHeader, body io.Reader, parsed *Parse
 		filename = params["name"]
 	}
 	if filename != "" || strings.EqualFold(disposition, "attachment") {
-		_, _ = io.Copy(io.Discard, decodeTransfer(header, body))
+		_, _ = io.Copy(io.Discard, io.LimitReader(decodeTransfer(header, body), maxDecodedPartBytes+1))
 		return nil
 	}
 
-	decoded, err := io.ReadAll(decodeTransfer(header, body))
+	decoded, err := io.ReadAll(io.LimitReader(decodeTransfer(header, body), maxDecodedPartBytes+1))
 	if err != nil {
 		if isTolerableEOF(err) {
 			decoded = bytes.TrimSpace(decoded)
@@ -315,14 +352,17 @@ func parseDisplayPart(header textproto.MIMEHeader, body io.Reader, parsed *Parse
 	}
 	switch lowerMediaType {
 	case "text/plain":
-		parsed.Text += "\n" + decodeTextBytes(decoded, params["charset"])
+		parsed.Text = appendBounded(parsed.Text, "\n"+decodeTextBytes(decoded, params["charset"]), maxBodyTextBytes)
 	case "text/html":
 		htmlText := decodeTextBytes(decoded, params["charset"])
+		if len(htmlText) > maxBodyHTMLBytes {
+			htmlText = htmlText[:maxBodyHTMLBytes]
+		}
 		if strings.TrimSpace(parsed.HTML) == "" {
 			parsed.HTML = htmlText
 		}
 		if strings.TrimSpace(parsed.Text) == "" {
-			parsed.Text += "\n" + stripHTML(htmlText)
+			parsed.Text = appendBounded(parsed.Text, "\n"+stripHTML(htmlText), maxBodyTextBytes)
 		}
 	}
 	return nil

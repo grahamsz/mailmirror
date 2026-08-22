@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -318,4 +319,62 @@ func officeZipFixture(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+func TestParseCapsMIMEDepthInsteadOfCrashing(t *testing.T) {
+	var body strings.Builder
+	const depth = 400
+	for i := 0; i < depth; i++ {
+		fmt.Fprintf(&body, "--b%d\r\nContent-Type: multipart/mixed; boundary=b%d\r\n\r\n", i, i+1)
+	}
+	body.WriteString("leaf\r\n")
+	raw := []byte("Content-Type: multipart/mixed; boundary=b0\r\n\r\n" + body.String())
+	parsed, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	_ = parsed
+}
+
+func TestParseDisplayBodyCapsMIMEDepth(t *testing.T) {
+	var body strings.Builder
+	const depth = 400
+	for i := 0; i < depth; i++ {
+		fmt.Fprintf(&body, "--b%d\r\nContent-Type: multipart/mixed; boundary=b%d\r\n\r\n", i, i+1)
+	}
+	body.WriteString("\r\ntext\r\n")
+	raw := []byte("Content-Type: multipart/mixed; boundary=b0\r\nFrom: a@b.test\r\nSubject: deep\r\n\r\n" + body.String())
+	_, _, err := ParseDisplayBody(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("ParseDisplayBody() error = %v", err)
+	}
+}
+
+func TestParseBoundsAccumulatedText(t *testing.T) {
+	part := "Content-Type: text/plain\r\n\r\n" + strings.Repeat("x", 4096) + "\r\n"
+	var inner strings.Builder
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&inner, "--outer\r\n%s", part)
+	}
+	inner.WriteString("--outer--\r\n")
+	raw := []byte("Content-Type: multipart/mixed; boundary=outer\r\nSubject: many parts\r\n\r\n" + inner.String())
+	parsed, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(parsed.Text) > maxBodyTextBytes {
+		t.Fatalf("accumulated text %d exceeds cap %d", len(parsed.Text), maxBodyTextBytes)
+	}
+}
+
+func TestParseTruncatesOversizedLeafPart(t *testing.T) {
+	big := strings.Repeat("y", maxDecodedPartBytes+1024)
+	raw := []byte("Content-Type: text/plain\r\n\r\n" + big)
+	parsed, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(parsed.Text) > maxDecodedPartBytes {
+		t.Fatalf("decoded part not truncated: %d bytes", len(parsed.Text))
+	}
 }

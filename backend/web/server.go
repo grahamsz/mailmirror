@@ -115,7 +115,13 @@ type Server struct {
 	snoozePushRunning         map[int64]bool
 	snoozePushDirty           map[int64]bool
 	snoozeSchedulerWake       chan struct{}
-	startedAt                 time.Time
+	// backgroundCtx bounds every fire-and-forget goroutine the server spawns
+	// (bulk read-state pushes and similar). Canceling it at Close stops new
+	// work and lets in-flight iterations exit promptly.
+	backgroundCtx    context.Context
+	backgroundCancel context.CancelFunc
+	readStatePushes  *readStatePushQueue
+	startedAt        time.Time
 }
 
 type contextKey string
@@ -273,6 +279,7 @@ func New(opts Options) (*Server, error) {
 		}
 	}
 	events := newEventHub()
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	srv := &Server{
 		store:                 opts.Store,
 		blobs:                 opts.Blobs,
@@ -310,6 +317,9 @@ func New(opts Options) (*Server, error) {
 		snoozePushRunning:         map[int64]bool{},
 		snoozePushDirty:           map[int64]bool{},
 		snoozeSchedulerWake:       make(chan struct{}, 1),
+		backgroundCtx:             backgroundCtx,
+		backgroundCancel:          backgroundCancel,
+		readStatePushes:           newReadStatePushQueue(),
 		startedAt:                 time.Now().UTC(),
 	}
 	if opts.Syncer != nil {

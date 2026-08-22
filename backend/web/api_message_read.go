@@ -3,7 +3,6 @@
 package web
 
 import (
-	"context"
 	"net/http"
 )
 
@@ -48,12 +47,7 @@ func (s *Server) apiBulkReadMessages(w http.ResponseWriter, r *http.Request) {
 	s.notifyUserChanged(cu.User.ID)
 	if s.syncer != nil && len(owned) > 0 {
 		ids := append([]int64(nil), owned...)
-		go func(userID int64) {
-			for _, messageID := range ids {
-				_ = s.syncer.SyncReadStateForMessage(context.Background(), userID, messageID)
-			}
-			s.notifyUserChanged(userID)
-		}(cu.User.ID)
+		s.queueReadStatePush(cu.User.ID, ids)
 	}
 	writeJSON(w, map[string]any{"ok": true, "updated": len(owned)})
 }

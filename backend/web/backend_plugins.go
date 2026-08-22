@@ -355,6 +355,9 @@ func (s *Server) Close() error {
 		return nil
 	}
 	s.backendLifecycleClosed = true
+	if s.backgroundCancel != nil {
+		s.backgroundCancel()
+	}
 	if s.ownedSyncRunnerCancel != nil {
 		s.ownedSyncRunnerCancel()
 		s.ownedSyncRunnerCancel = nil

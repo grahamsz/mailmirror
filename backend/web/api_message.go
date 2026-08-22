@@ -1058,7 +1058,8 @@ func (s *Server) apiSetMessageStarred(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	go func(userID, messageID int64) {
-		if err := s.syncer.SyncStarStateForMessage(context.Background(), userID, messageID); err != nil {
+		ctx := s.backgroundContext()
+		if err := s.syncer.SyncStarStateForMessage(ctx, userID, messageID); err != nil && ctx.Err() == nil {
 			log.Printf("sync starred flag user_id=%d message_id=%d: %v", userID, messageID, err)
 		}
 		s.notifyUserChanged(userID)
@@ -1227,11 +1228,7 @@ func (s *Server) threadViewsForMessageTimed(ctx context.Context, cu currentUser,
 		if err := s.store.MarkMessagesReadForUser(ctx, cu.User.ID, unreadIDs, true, true); err == nil {
 			markedRead = true
 			if s.syncer != nil {
-				for _, messageID := range unreadIDs {
-					go func(userID, messageID int64) {
-						_ = s.syncer.SyncReadStateForMessage(context.Background(), userID, messageID)
-					}(cu.User.ID, messageID)
-				}
+				s.queueReadStatePush(cu.User.ID, unreadIDs)
 			}
 		}
 		stop()

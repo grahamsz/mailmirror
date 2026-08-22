@@ -6,8 +6,17 @@ package web
 import (
 	"context"
 	"errors"
+	"log"
+	"time"
 
 	"rolltop/backend/plugins"
+)
+
+// Display-path hook budgets mirror the syncer guards: a hung in-process
+// plugin degrades one render instead of hanging the HTTP request forever.
+const (
+	displaySecurityDetectTimeout    = 5 * time.Second
+	displaySecurityTransformTimeout = 10 * time.Second
 )
 
 func (s *Server) hasMessageSecurityProvider(ctx context.Context) (bool, error) {
@@ -35,8 +44,14 @@ func (s *Server) detectMessageSecurity(ctx context.Context, userID int64, raw []
 		if !ok {
 			continue
 		}
-		state, stateErr := provider.DetectMessageSecurity(ctx, s, userID, raw, body)
+		state, stateErr := plugins.CallHook(displaySecurityDetectTimeout, func() (plugins.MessageSecurityState, error) {
+			return provider.DetectMessageSecurity(ctx, s, userID, raw, body)
+		})
 		if errors.Is(stateErr, plugins.ErrUnsupported) {
+			continue
+		}
+		if plugins.IsHookGuardFailure(stateErr) {
+			log.Printf("display security detect skipped plugin_id=%s user_id=%d error_type=%T", backendPlugin.ID(), userID, stateErr)
 			continue
 		}
 		if stateErr != nil {
@@ -59,8 +74,14 @@ func (s *Server) transformMessageSecurityBody(ctx context.Context, userID int64,
 		if !ok {
 			continue
 		}
-		transform, transformErr := provider.TransformMessageBody(ctx, s, userID, raw, state, body)
+		transform, transformErr := plugins.CallHook(displaySecurityTransformTimeout, func() (plugins.MessageBodyTransform, error) {
+			return provider.TransformMessageBody(ctx, s, userID, raw, state, body)
+		})
 		if errors.Is(transformErr, plugins.ErrUnsupported) {
+			continue
+		}
+		if plugins.IsHookGuardFailure(transformErr) {
+			log.Printf("display security transform skipped plugin_id=%s user_id=%d error_type=%T", backendPlugin.ID(), userID, transformErr)
 			continue
 		}
 		if transformErr != nil {

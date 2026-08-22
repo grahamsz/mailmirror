@@ -6,8 +6,19 @@ package syncer
 import (
 	"context"
 	"errors"
+	"log"
+	"time"
 
 	"rolltop/backend/plugins"
+)
+
+// Hook budgets keep a misbehaving in-process plugin from wedging the sync
+// pipeline. Guards convert panics/timeouts into skippable failures.
+const (
+	messageSecurityDetectTimeout    = 5 * time.Second
+	messageSecurityTransformTimeout = 10 * time.Second
+	messageClassifyHookTimeout      = 5 * time.Second
+	messageImportHookTimeout        = 5 * time.Second
 )
 
 func (s *Service) detectMessageSecurity(ctx context.Context, userID int64, raw []byte, body plugins.MessageBody) (plugins.MessageSecurityState, bool, error) {
@@ -24,8 +35,14 @@ func (s *Service) detectMessageSecurity(ctx context.Context, userID int64, raw [
 			continue
 		}
 		generationRecoveryPhase(ctx, "plugin-security-detect", backendPlugin.ID())
-		state, stateErr := provider.DetectMessageSecurity(ctx, host, userID, raw, body)
+		state, stateErr := plugins.CallHook(messageSecurityDetectTimeout, func() (plugins.MessageSecurityState, error) {
+			return provider.DetectMessageSecurity(ctx, host, userID, raw, body)
+		})
 		if errors.Is(stateErr, plugins.ErrUnsupported) {
+			continue
+		}
+		if plugins.IsHookGuardFailure(stateErr) {
+			log.Printf("message security detect skipped plugin_id=%s user_id=%d error_type=%T", backendPlugin.ID(), userID, stateErr)
 			continue
 		}
 		if stateErr != nil {
@@ -50,8 +67,14 @@ func (s *Service) transformMessageSecurityBody(ctx context.Context, userID int64
 			continue
 		}
 		generationRecoveryPhase(ctx, "plugin-security-transform", backendPlugin.ID())
-		transform, transformErr := provider.TransformMessageBody(ctx, host, userID, raw, state, body)
+		transform, transformErr := plugins.CallHook(messageSecurityTransformTimeout, func() (plugins.MessageBodyTransform, error) {
+			return provider.TransformMessageBody(ctx, host, userID, raw, state, body)
+		})
 		if errors.Is(transformErr, plugins.ErrUnsupported) {
+			continue
+		}
+		if plugins.IsHookGuardFailure(transformErr) {
+			log.Printf("message security transform skipped plugin_id=%s user_id=%d error_type=%T", backendPlugin.ID(), userID, transformErr)
 			continue
 		}
 		if transformErr != nil {

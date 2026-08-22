@@ -5,6 +5,7 @@ package syncer
 import (
 	"context"
 	"errors"
+	"log"
 
 	"rolltop/backend/plugins"
 	"rolltop/backend/search"
@@ -23,7 +24,13 @@ func (s *Service) importIncomingMessageHooks(ctx context.Context, userID int64, 
 			continue
 		}
 		generationRecoveryPhase(ctx, "plugin-incoming-message", backendPlugin.ID())
-		if err := hook.ImportIncomingMessage(ctx, host, userID, raw, parsedFrom); err != nil {
+		if _, err := plugins.CallHook(messageImportHookTimeout, func() (struct{}, error) {
+			return struct{}{}, hook.ImportIncomingMessage(ctx, host, userID, raw, parsedFrom)
+		}); err != nil {
+			if plugins.IsHookGuardFailure(err) {
+				log.Printf("incoming message hook skipped plugin_id=%s user_id=%d error_type=%T", backendPlugin.ID(), userID, err)
+				continue
+			}
 			return err
 		}
 	}
@@ -52,8 +59,16 @@ func (s *Service) importStoredMessageHooks(ctx context.Context, hooks []plugins.
 	}
 	for _, hook := range hooks {
 		generationRecoveryPhase(ctx, "plugin-stored-message", hook.ID())
-		if err := hook.ImportStoredMessage(ctx, host, info); err != nil && !errors.Is(err, plugins.ErrUnsupported) {
-			return err
+		if _, err := plugins.CallHook(messageImportHookTimeout, func() (struct{}, error) {
+			return struct{}{}, hook.ImportStoredMessage(ctx, host, info)
+		}); err != nil {
+			if plugins.IsHookGuardFailure(err) {
+				log.Printf("stored message hook skipped plugin_id=%s user_id=%d message_id=%d error_type=%T", hook.ID(), info.UserID, info.MessageID, err)
+				continue
+			}
+			if !errors.Is(err, plugins.ErrUnsupported) {
+				return err
+			}
 		}
 	}
 	return nil

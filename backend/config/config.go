@@ -70,7 +70,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cookieSecure, err := parseBool("ROLLTOP_COOKIE_SECURE", false)
+	// Session cookies are marked Secure by default so they never travel over
+	// plaintext hops. Plain-HTTP deployments must opt out explicitly with
+	// ROLLTOP_COOKIE_SECURE=false.
+	cookieSecure, err := parseBool("ROLLTOP_COOKIE_SECURE", true)
 	if err != nil {
 		return Config{}, err
 	}

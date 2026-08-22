@@ -708,4 +708,14 @@
   .inline-reply {
     margin: 0;
   }
+
+  // Give the reply editor real typing room on phones; the fixed 224px desktop
+  // height reads as a cramped one-line box next to the format and send bars.
+  .inline-reply .compose-editor {
+    min-height: 30vh;
+  }
+
+  body.rolltop-composer-open .mobile-compose-fab {
+    display: none;
+  }
 }

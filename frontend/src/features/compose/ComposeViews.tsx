@@ -416,6 +416,36 @@ export function ComposeBox({
     };
   }, [inline]);
 
+  // An inline reply opens deep inside a long thread, so nothing else brings it
+  // into view. Focus its editor immediately and re-reveal it while the
+  // on-screen keyboard settles, so the reply starts in view instead of sitting
+  // below the fold. The deadline keeps later resizes from fighting the user's
+  // own scrolling.
+  useEffect(() => {
+    if (!inline) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const deadline = Date.now() + 2500;
+    const reveal = () => {
+      editor.scrollIntoView({ block: "center", behavior: "smooth" });
+    };
+    const raf = window.requestAnimationFrame(() => {
+      editor.focus({ preventScroll: true });
+      reveal();
+    });
+    const viewport = window.visualViewport;
+    const onViewportChange = () => {
+      if (Date.now() <= deadline) reveal();
+    };
+    viewport?.addEventListener("resize", onViewportChange);
+    window.addEventListener("resize", onViewportChange);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      viewport?.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("resize", onViewportChange);
+    };
+  }, [inline]);
+
   useEffect(() => {
     if (!nativeShareID) return;
     let cancelled = false;

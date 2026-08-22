@@ -876,6 +876,14 @@ export function ThreadView({
   const [showImages, setShowImages] = useState(() => new URLSearchParams(location.search).get("images") === "1");
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const [inlineReply, setInlineReply] = useState<ComposeForm | null>(null);
+
+  // While an inline reply is open, keep the floating Compose button from
+  // covering the reply's send bar on small screens.
+  useEffect(() => {
+    if (!inlineReply) return;
+    document.body.classList.add("rolltop-composer-open");
+    return () => document.body.classList.remove("rolltop-composer-open");
+  }, [inlineReply]);
   const [unsubscribingID, setUnsubscribingID] = useState<number | null>(null);
   const [pendingUnsubscribe, setPendingUnsubscribe] = useState<ThreadMessage | null>(null);
   const [originalSource, setOriginalSource] = useState<OriginalSourceState | null>(null);

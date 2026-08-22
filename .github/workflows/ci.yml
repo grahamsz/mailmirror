@@ -168,10 +168,10 @@ jobs:
             printf '%s' "$ROLLTOP_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ROLLTOP_ANDROID_KEYSTORE_FILE"
           fi
 
-          ./android/gradlew -p android :app:testDebugUnitTest :app:lintDebug
+          ./android/gradlew -p android :app:testDebugUnitTest :app:lintDebug --stacktrace
 
           if [ "$signing_values" -eq 5 ]; then
-            ./android/gradlew -p android :app:assembleRelease
+            ./android/gradlew -p android :app:assembleRelease --stacktrace
             apk_path="android/app/build/outputs/apk/release/app-release.apk"
             metadata_path="android/app/build/outputs/apk/release/output-metadata.json"
             artifact_suffix="release"

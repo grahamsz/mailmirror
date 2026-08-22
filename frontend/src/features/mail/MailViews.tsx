@@ -61,6 +61,12 @@ function messageAnnotationNodes(plugins: RuntimePlugin[], message: Conversation[
  * rows when the URL changes, animates newly delivered messages on the first page,
  * and shows a folder-level sync clue when the selected mailbox is manual or off.
  */
+// A full document load that lands on a folder (browser refresh, or reopening
+// the app at that route) should queue a sync of that folder once so the list
+// reflects the server. The module flag makes this one-shot per page load, so
+// ordinary in-app navigation never re-triggers it.
+let bootFolderSyncPending = true;
+
 export function MailView({
   userID,
   csrf,
@@ -196,6 +202,31 @@ export function MailView({
       cancelled = true;
     };
   }, [userID, mailbox?.id, effectiveMode, csrf, addToast]);
+
+  // After a browser refresh, whichever folder the reloaded page lands on gets
+  // one queued sync regardless of its sync mode (except "never"), so the list
+  // reflects the server without waiting for the next scheduled pass. The flag
+  // makes this one-shot per page load; pull-to-refresh remains the explicit
+  // gesture for repeat refreshes.
+  useEffect(() => {
+    if (!bootFolderSyncPending || !csrf) return;
+    const target = mailbox;
+    if (target && effectiveMode === "never") return;
+    // Wait for chrome to resolve the folder before consuming the one-shot.
+    if (!target && mailboxID) return;
+    bootFolderSyncPending = false;
+    let cancelled = false;
+    const request = target ? api.syncFolder(csrf, target.id) : api.syncAccount(csrf);
+    request.catch((err) => {
+      // Losing a race against an already-running sync is fine: its SSE updates
+      // will refresh this view.
+      if (err instanceof ApiError && (err.status === 409 || err.status === 503)) return;
+      if (!cancelled) addToast(`Folder refresh failed: ${messageFromError(err)}`, "error");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userID, mailbox?.id, mailboxID, effectiveMode, csrf, addToast]);
 
   // Route changes should feel immediate: clear the old page before the server
   // responds so the user is not looking at stale rows for another folder.

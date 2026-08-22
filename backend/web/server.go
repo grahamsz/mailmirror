@@ -515,15 +515,14 @@ func (s *Server) handleSyncWebhook(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// validWebhookToken accepts the token from headers only. Query strings are
+// deliberately not honored: they leak into reverse-proxy and access logs.
 func (s *Server) validWebhookToken(r *http.Request) bool {
 	got := strings.TrimSpace(r.Header.Get("X-Rolltop-Webhook-Token"))
 	if got == "" {
 		if authz := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(strings.ToLower(authz), "bearer ") {
 			got = strings.TrimSpace(authz[len("bearer "):])
 		}
-	}
-	if got == "" {
-		got = strings.TrimSpace(r.URL.Query().Get("token"))
 	}
 	if got == "" || s.webhookToken == "" {
 		return false

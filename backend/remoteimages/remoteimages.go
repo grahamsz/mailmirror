@@ -273,11 +273,27 @@ func safeDialContext(ctx context.Context, network, address string) (net.Conn, er
 }
 
 func privateIP(ip net.IP) bool {
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
 		return true
 	}
 	if v4 := ip.To4(); v4 != nil {
-		return v4[0] == 169 && v4[1] == 254
+		switch {
+		case v4[0] == 169 && v4[1] == 254:
+			// Link-local (cloud metadata) — also caught by IsLinkLocalUnicast.
+			return true
+		case v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127:
+			// CGNAT 100.64.0.0/10.
+			return true
+		case v4[0] == 198 && (v4[1] == 18 || v4[1] == 19):
+			// Benchmarking 198.18.0.0/15.
+			return true
+		case v4[0] == 255:
+			// Limited broadcast.
+			return true
+		case v4[0] == 0:
+			// "This network" range beyond the unspecified address.
+			return true
+		}
 	}
 	return false
 }

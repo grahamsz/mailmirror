@@ -1,6 +1,7 @@
 package remoteimages
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -47,5 +48,36 @@ func TestReplaceCachedRewritesKnownRemoteImages(t *testing.T) {
 	}
 	if !strings.Contains(got, `url(/remote-images/bg)`) {
 		t.Fatalf("css URL was not rewritten: %s", got)
+	}
+}
+
+func TestPrivateIPBlocksAdditionalSensitiveRanges(t *testing.T) {
+	cases := map[string]bool{
+		"127.0.0.1":        true,
+		"10.1.2.3":         true,
+		"192.168.1.1":      true,
+		"172.16.0.9":       true,
+		"169.254.169.254":  true,
+		"100.64.0.1":       true,
+		"100.127.255.254":  true,
+		"198.18.0.5":       true,
+		"198.19.255.255":   true,
+		"255.255.255.255":  true,
+		"0.0.0.0":          true,
+		"0.1.2.3":          true,
+		"224.0.0.1":        true,
+		"::1":              true,
+		"fe80::1":          true,
+		"ff02::1":          true,
+		"8.8.8.8":          false,
+		"1.1.1.1":          false,
+		"2606:4700::1111":  false,
+		"100.128.0.1":      false,
+		"198.20.0.1":       false,
+	}
+	for ip, want := range cases {
+		if got := privateIP(net.ParseIP(ip)); got != want {
+			t.Errorf("privateIP(%s) = %t, want %t", ip, got, want)
+		}
 	}
 }

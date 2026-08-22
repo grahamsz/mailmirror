@@ -159,7 +159,11 @@ func (s *Server) apiSetup(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	user, err := s.store.CreateUser(r.Context(), in.Email, in.Name, hash, true)
+	user, err := s.store.CreateInitialAdminIfNone(r.Context(), in.Email, in.Name, hash)
+	if errors.Is(err, store.ErrSetupAlreadyComplete) {
+		writeAPIError(w, http.StatusConflict, "setup is already complete")
+		return
+	}
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "Could not create admin user.")
 		return

@@ -64,3 +64,31 @@ func TestTouchSyncRunRefreshesUpdatedAtOnlyForRunningRuns(t *testing.T) {
 		t.Fatalf("touch modified a terminal run: %v vs %v", final, interruptedAt)
 	}
 }
+
+func TestCreateInitialAdminIfNoneIsAtomicAndSingleShot(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "rolltop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+
+	admin, err := db.CreateInitialAdminIfNone(ctx, "Founder@Example.test", "Founder", "argon2hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admin.IsAdmin || admin.Email != "founder@example.test" {
+		t.Fatalf("initial admin = %+v", admin)
+	}
+
+	if _, err := db.CreateInitialAdminIfNone(ctx, "second@example.test", "Second", "argon2hash"); err != ErrSetupAlreadyComplete {
+		t.Fatalf("second initial admin error = %v, want ErrSetupAlreadyComplete", err)
+	}
+	users, err := db.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 1 {
+		t.Fatalf("users = %d, want only the first admin", len(users))
+	}
+}

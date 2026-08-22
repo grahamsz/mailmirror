@@ -50,6 +50,48 @@ func (s *Store) CreateUser(ctx context.Context, email, name, passwordHash string
 	return s.GetUserByID(ctx, id)
 }
 
+// ErrSetupAlreadyComplete reports that users already exist when a caller tried
+// to create the initial admin account.
+var ErrSetupAlreadyComplete = errors.New("setup is already complete")
+
+// CreateInitialAdminIfNone creates the first admin account only when no users
+// exist yet. The count check and insert share one immediate transaction, so two
+// concurrent first-run requests cannot both pass the check and both become
+// admins (the setup handler's earlier existence check alone was racy).
+func (s *Store) CreateInitialAdminIfNone(ctx context.Context, email, name, passwordHash string) (User, error) {
+	email = cleanEmail(email)
+	name = strings.TrimSpace(name)
+	if email == "" || name == "" || passwordHash == "" {
+		return User{}, errors.New("email, name, and password hash are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return User{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {
+		return User{}, err
+	}
+	if n > 0 {
+		return User{}, ErrSetupAlreadyComplete
+	}
+	ts := nowUnix()
+	res, err := tx.ExecContext(ctx, `INSERT INTO users (email, name, password_hash, is_admin, created_at, updated_at)
+		VALUES (?, ?, ?, 1, ?, ?)`, email, name, passwordHash, ts, ts)
+	if err != nil {
+		return User{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return User{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return User{}, err
+	}
+	return s.GetUserByID(ctx, id)
+}
+
 // GetUserByID loads a user from the system database by ID.
 func (s *Store) GetUserByID(ctx context.Context, id int64) (User, error) {
 	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userSelectColumns+` FROM users WHERE id = ?`, id))

@@ -177,14 +177,30 @@ func (p *oidcPlugin) callback(host plugins.APIHost, _ string, w http.ResponseWri
 		return
 	}
 	if claims.Email == "" && discovery.UserinfoEndpoint != "" && token.AccessToken != "" {
-		claims.Email, claims.Name, _ = fetchUserinfo(r.Context(), discovery.UserinfoEndpoint, token.AccessToken)
+		userinfoEmail, userinfoName, userinfoVerified, userinfoErr := fetchUserinfo(r.Context(), discovery.UserinfoEndpoint, token.AccessToken)
+		if userinfoErr != nil {
+			host.WriteAPIError(w, http.StatusUnauthorized, "OIDC account email could not be confirmed.")
+			return
+		}
+		claims.Email = userinfoEmail
+		if claims.Name == "" {
+			claims.Name = userinfoName
+		}
+		// Userinfo-derived verification is only trusted when the ID token made
+		// no claim at all; it can never override an explicit false.
+		if claims.EmailVerified == nil {
+			claims.EmailVerified = userinfoVerified
+		}
 	}
 	email, err := normalizeEmail(claims.Email)
 	if err != nil {
 		host.WriteAPIError(w, http.StatusUnauthorized, "OIDC account has no usable email address.")
 		return
 	}
-	if claims.EmailVerified != nil && !*claims.EmailVerified {
+	// Account linking happens purely by email match below, so an unverified or
+	// unasserted email_verified claim would let anyone who can set their IdP
+	// profile email log into an existing Rolltop account.
+	if claims.EmailVerified == nil || !*claims.EmailVerified {
 		host.WriteAPIError(w, http.StatusUnauthorized, "OIDC email address is not verified.")
 		return
 	}
@@ -451,28 +467,29 @@ func fetchRS256Key(ctx context.Context, jwksURI, kid string) (*rsa.PublicKey, er
 	return nil, errors.New("OIDC signing key was not found")
 }
 
-func fetchUserinfo(ctx context.Context, endpoint, accessToken string) (string, string, error) {
+func fetchUserinfo(ctx context.Context, endpoint, accessToken string) (string, string, *bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode/100 != 2 {
-		return "", "", fmt.Errorf("OIDC userinfo failed with status %d", res.StatusCode)
+		return "", "", nil, fmt.Errorf("OIDC userinfo failed with status %d", res.StatusCode)
 	}
 	var out struct {
-		Email string `json:"email"`
-		Name  string `json:"name"`
+		Email         string `json:"email"`
+		Name          string `json:"name"`
+		EmailVerified *bool  `json:"email_verified"`
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&out); err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
-	return out.Email, out.Name, nil
+	return out.Email, out.Name, out.EmailVerified, nil
 }
 
 func createOIDCUser(ctx context.Context, st *store.Store, email, name string) (store.User, error) {

@@ -253,10 +253,18 @@ type ProtectedAPIHandler func(APIHost, string, http.ResponseWriter, *http.Reques
 // ProtectedAPIRoute describes one protected /api route owned by a backend
 // plugin. Path is relative to /api, for example "plugins/example/settings".
 // Prefix matches both Path itself and slash-delimited descendants of Path.
+//
+// The host enforces session authentication and, by default, the same CSRF
+// token check as core API mutations on non-GET requests. A route that
+// intentionally accepts non-browser clients must set SkipCSRFCheck and provide
+// an equivalent protection of its own.
 type ProtectedAPIRoute struct {
 	Path   string
 	Prefix bool
 	Handle ProtectedAPIHandler
+	// SkipCSRFCheck opts this route out of the host's automatic CSRF
+	// verification. Handlers remain responsible for authenticating the request.
+	SkipCSRFCheck bool
 }
 
 type PublicAPIRoute struct {

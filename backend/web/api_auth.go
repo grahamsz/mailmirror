@@ -194,15 +194,31 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	emailKey := normalizeLoginKey(in.Email)
+	ip := clientIPFromRequest(r)
+	if s.loginThrottle != nil && !s.loginThrottle.allow(emailKey, ip) {
+		writeAPIError(w, http.StatusTooManyRequests, "Too many sign-in attempts. Try again in a few minutes.")
+		return
+	}
 	user, err := s.store.GetUserByEmail(r.Context(), in.Email)
 	if err != nil {
+		s.burnUnknownAccountVerifyWork(in.Password)
+		if s.loginThrottle != nil {
+			s.loginThrottle.recordFailure(emailKey, ip)
+		}
 		writeAPIError(w, http.StatusUnauthorized, "Invalid email or password.")
 		return
 	}
 	ok, err := auth.VerifyPassword(user.PasswordHash, in.Password)
 	if err != nil || !ok {
+		if s.loginThrottle != nil {
+			s.loginThrottle.recordFailure(emailKey, ip)
+		}
 		writeAPIError(w, http.StatusUnauthorized, "Invalid email or password.")
 		return
+	}
+	if s.loginThrottle != nil {
+		s.loginThrottle.recordSuccess(emailKey)
 	}
 	if err := s.loginUser(w, r, user.ID); err != nil {
 		s.serverError(w, err)

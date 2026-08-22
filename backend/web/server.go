@@ -121,6 +121,9 @@ type Server struct {
 	backgroundCtx    context.Context
 	backgroundCancel context.CancelFunc
 	readStatePushes  *readStatePushQueue
+	loginThrottle    *loginThrottle
+	dummyVerifyOnce  sync.Once
+	dummyHash        string
 	startedAt        time.Time
 }
 
@@ -320,6 +323,7 @@ func New(opts Options) (*Server, error) {
 		backgroundCtx:             backgroundCtx,
 		backgroundCancel:          backgroundCancel,
 		readStatePushes:           newReadStatePushQueue(),
+		loginThrottle:             newLoginThrottle(),
 		startedAt:                 time.Now().UTC(),
 	}
 	if opts.Syncer != nil {
@@ -343,12 +347,31 @@ func New(opts Options) (*Server, error) {
 	}
 	srv.startAutoStartBackendPlugins(context.Background())
 	srv.warmAllMailFirstPages(context.Background())
+	srv.loginThrottle.setDummyVerifier(srv.burnUnknownAccountVerifyWork)
 	if !opts.DisableBackgroundWorkers {
 		srv.resumeNewMailWebPushAsync()
 		srv.resumeSnoozeReminderWebPushAsync()
 		srv.startSnoozeScheduler()
 	}
 	return srv, nil
+}
+
+// burnUnknownAccountVerifyWork performs one Argon2id verification against a
+// throwaway hash so a login attempt for a nonexistent account costs the same
+// CPU time as one for a real account. Without this, response latency leaks
+// which emails are registered.
+func (s *Server) burnUnknownAccountVerifyWork(password string) {
+	s.dummyVerifyOnce.Do(func() {
+		token, err := auth.NewOpaqueToken()
+		if err == nil {
+			if hash, hashErr := auth.HashPassword(token); hashErr == nil {
+				s.dummyHash = hash
+			}
+		}
+	})
+	if s.dummyHash != "" {
+		_, _ = auth.VerifyPassword(s.dummyHash, password)
+	}
 }
 
 // Handler defines the browser/API/static route surface, then wraps it with session

@@ -471,7 +471,7 @@ func startApp(ctx context.Context, cfg config.Config, startup *startupState) (*a
 
 	startup.update("Services", "initializing sync and web services", 0, 1)
 	blobStore := blob.New(cfg.DataDir)
-	imapFetcher := &imapclient.Fetcher{MasterKey: cfg.MasterKey}
+	imapFetcher := &imapclient.Fetcher{MasterKey: cfg.MasterKey, MaxRawMessageBytes: cfg.MaxMessageBytes}
 	syncSvc := &syncer.Service{
 		Store:         db,
 		Blobs:         blobStore,
@@ -481,22 +481,26 @@ func startApp(ctx context.Context, cfg config.Config, startup *startupState) (*a
 		BlobRetention: cfg.BlobRetention,
 		PluginDir:     cfg.PluginDir,
 		MasterKey:     cfg.MasterKey,
+		BaseContext:   ctx,
+
+		MaxMessageBytes: cfg.MaxMessageBytes,
 	}
 	syncRunner := syncer.NewRunnerWithContext(ctx, syncSvc)
 	webServer, err := web.New(web.Options{
-		Store:        db,
-		Blobs:        blobStore,
-		Search:       searchSvc,
-		Syncer:       syncSvc,
-		SyncRunner:   syncRunner,
-		MasterKey:    cfg.MasterKey,
-		DataDir:      cfg.DataDir,
-		DatabasePath: cfg.DatabasePath,
-		IndexPath:    cfg.IndexPath,
-		PluginDir:    cfg.PluginDir,
-		SessionTTL:   cfg.SessionTTL,
-		CookieSecure: cfg.CookieSecure,
-		WebhookToken: cfg.WebhookToken,
+		Store:         db,
+		Blobs:         blobStore,
+		Search:        searchSvc,
+		Syncer:        syncSvc,
+		SyncRunner:    syncRunner,
+		MasterKey:     cfg.MasterKey,
+		DataDir:       cfg.DataDir,
+		DatabasePath:  cfg.DatabasePath,
+		IndexPath:     cfg.IndexPath,
+		PluginDir:     cfg.PluginDir,
+		SessionTTL:    cfg.SessionTTL,
+		CookieSecure:  cfg.CookieSecure,
+		WebhookToken:  cfg.WebhookToken,
+		PublicBaseURL: cfg.PublicBaseURL,
 	})
 	if err != nil {
 		return nil, err
@@ -516,7 +520,7 @@ func startApp(ctx context.Context, cfg config.Config, startup *startupState) (*a
 	for _, user := range users {
 		syncRunner.StartAttachmentIndex(user.ID)
 	}
-	go reconcileStaleSyncRuns(ctx, db, 5*time.Minute)
+	go reconcileStaleSyncRuns(ctx, db, 15*time.Minute)
 	if cfg.InboxPollInterval > 0 {
 		// IMAP IDLE is the primary low-latency path. A separate minute-by-minute
 		// poll used to queue the same INBOX work while the IDLE watcher was healthy,

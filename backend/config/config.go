@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,6 +31,12 @@ type Config struct {
 	InboxPollInterval time.Duration
 	BlobRetention     time.Duration
 	WebhookToken      string
+	// PublicBaseURL is the canonical externally reachable origin used to build
+	// links in outbound email (password resets). When empty, links fall back
+	// to the request Host, which is spoofable behind a misconfigured proxy.
+	PublicBaseURL string
+	// MaxMessageBytes caps the RFC822 size of messages mirrored in full.
+	MaxMessageBytes int64
 }
 
 // Load reads environment configuration, applies defaults, and validates values needed before services start.
@@ -67,6 +74,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	publicBaseURL, err := parsePublicBaseURL("ROLLTOP_PUBLIC_BASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
+	maxMessageBytes, err := parseInt64("ROLLTOP_MAX_MESSAGE_BYTES", 50*1024*1024)
+	if err != nil {
+		return Config{}, err
+	}
+	const minMessageBytes = 1024 * 1024
+	if maxMessageBytes < minMessageBytes {
+		return Config{}, fmt.Errorf("ROLLTOP_MAX_MESSAGE_BYTES must be at least %d bytes", minMessageBytes)
+	}
 
 	return Config{
 		Addr:              env("ROLLTOP_ADDR", ":8080"),
@@ -81,6 +100,8 @@ func Load() (Config, error) {
 		InboxPollInterval: inboxPollInterval,
 		BlobRetention:     blobRetention,
 		WebhookToken:      os.Getenv("ROLLTOP_WEBHOOK_TOKEN"),
+		PublicBaseURL:     publicBaseURL,
+		MaxMessageBytes:   maxMessageBytes,
 	}, nil
 }
 
@@ -138,4 +159,35 @@ func parseBool(key string, fallback bool) (bool, error) {
 		return false, fmt.Errorf("%s: %w", key, err)
 	}
 	return b, nil
+}
+
+func parseInt64(key string, fallback int64) (int64, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return n, nil
+}
+
+// parsePublicBaseURL accepts an absolute http(s) origin and normalizes away
+// the trailing slash and any path/query/fragment, since it is only used to
+// build absolute links.
+func parsePublicBaseURL(key string) (string, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return "", nil
+	}
+	u, err := url.Parse(v)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", key, err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if (scheme != "http" && scheme != "https") || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return "", fmt.Errorf("%s must be an absolute http(s) origin without a path, e.g. https://mail.example.com", key)
+	}
+	return scheme + "://" + u.Host, nil
 }

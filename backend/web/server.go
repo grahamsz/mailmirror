@@ -58,6 +58,10 @@ type Options struct {
 	SessionTTL   time.Duration
 	CookieSecure bool
 	WebhookToken string
+	// PublicBaseURL is the canonical externally reachable origin (e.g.
+	// https://mail.example.com) used when building absolute links in outbound
+	// email. When empty, links fall back to the incoming request Host.
+	PublicBaseURL string
 	// DisableBackgroundWorkers is used by focused embeddings and tests that
 	// explicitly drive scheduler behavior themselves.
 	DisableBackgroundWorkers bool
@@ -86,6 +90,7 @@ type Server struct {
 	startedBackendPlugins     map[string]plugins.BackendPlugin
 	sessionTTL                time.Duration
 	cookieSecure              bool
+	publicBaseURL             string
 	webhookToken              string
 	events                    *eventHub
 	statusMu                  sync.Mutex
@@ -303,6 +308,7 @@ func New(opts Options) (*Server, error) {
 		startedBackendPlugins: map[string]plugins.BackendPlugin{},
 		sessionTTL:            opts.SessionTTL,
 		cookieSecure:          opts.CookieSecure,
+		publicBaseURL:         strings.TrimSpace(opts.PublicBaseURL),
 		webhookToken:          strings.TrimSpace(opts.WebhookToken),
 		events:                events,
 

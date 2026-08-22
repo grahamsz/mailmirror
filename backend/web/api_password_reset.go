@@ -38,7 +38,7 @@ func (s *Server) apiPasswordResetRequest(w http.ResponseWriter, r *http.Request)
 			tokenHash := mmcrypto.TokenHash(token)
 			expires := time.Now().Add(45 * time.Minute)
 			if createErr := s.store.CreatePasswordResetToken(r.Context(), user.ID, tokenHash, expires); createErr == nil {
-				link := passwordResetLink(r, token)
+				link := s.passwordResetLink(r, token)
 				_ = s.sendPasswordResetEmail(r.Context(), user, link, expires)
 			}
 		}
@@ -82,7 +82,23 @@ func (s *Server) apiPasswordResetComplete(w http.ResponseWriter, r *http.Request
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-func passwordResetLink(r *http.Request, token string) string {
+// passwordResetLink builds the absolute link emailed to the user's backup
+// address. When a canonical public base URL is configured it is always used;
+// the incoming request Host is only trusted when no canonical origin exists,
+// because proxies that forward arbitrary Host headers would otherwise let an
+// attacker point the emailed link at their own machine.
+func (s *Server) passwordResetLink(r *http.Request, token string) string {
+	if base := strings.TrimSpace(s.publicBaseURL); base != "" {
+		if u, err := url.Parse(base); err == nil && u.Scheme != "" && u.Host != "" {
+			u.Path = "/reset-password"
+			u.RawQuery = ""
+			u.Fragment = ""
+			q := u.Query()
+			q.Set("token", token)
+			u.RawQuery = q.Encode()
+			return u.String()
+		}
+	}
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		scheme = "https"

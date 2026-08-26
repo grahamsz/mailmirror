@@ -22,4 +22,9 @@ Run before handing off:
 
 ```sh
 go test ./...
+npm test
 ```
+
+`npm test` covers the frontend offline modules (search ranking, IndexedDB
+caches, outbox policy) via vitest; keep those suites current when changing
+anything under `frontend/src/lib/offline*`.

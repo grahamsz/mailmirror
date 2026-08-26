@@ -99,7 +99,9 @@ export async function recordMailConversations(userID: number, conversations: Con
       store.put(record);
     }
   });
-  void pruneWhenDue();
+  // Awaited rather than fire-and-forget so callers never observe stores
+  // mid-sweep; the throttle bounds how often that wait actually costs anything.
+  await pruneWhenDue();
 }
 
 /** recordThreadPayload caches a rendered conversation plus header rows for every message in it. */
@@ -245,10 +247,11 @@ export async function getCachedThreadMetas(userID: number): Promise<CachedThread
 /**
  * pruneWhenDue drops entries older than seven days and enforces size caps.
  * Runs after writes but throttled: each pass scans both stores end to end.
+ * Pass force=true for explicit sweeps that must ignore the throttle window.
  */
-export async function pruneWhenDue(): Promise<void> {
+export async function pruneWhenDue(force = false): Promise<void> {
   const now = Date.now();
-  if (now - lastPruneAt < pruneMinIntervalMS) return;
+  if (!force && now - lastPruneAt < pruneMinIntervalMS) return;
   lastPruneAt = now;
   const cutoff = now - retentionMS;
   await pruneStore(HEADERS_STORE, maxHeaderEntries, cutoff);

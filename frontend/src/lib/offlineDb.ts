@@ -4,7 +4,7 @@
 // and resolve to empty results instead of throwing when storage is unavailable.
 
 export const OFFLINE_DB_NAME = "rolltop.offline";
-export const OFFLINE_DB_VERSION = 1;
+export const OFFLINE_DB_VERSION = 2;
 export const HEADERS_STORE = "headers";
 export const BODIES_STORE = "bodies";
 export const OUTBOX_STORE = "outbox";
@@ -34,6 +34,13 @@ export function openOfflineDB(): Promise<IDBDatabase | null> {
         if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
           const outbox = db.createObjectStore(OUTBOX_STORE, { keyPath: "id", autoIncrement: true });
           outbox.createIndex("user_status", ["user_id", "status"]);
+        }
+        // v2: the outbox primary key is a plain auto-increment id, so
+        // per-user listings need a dedicated index rather than a compound
+        // key range over [user_id, ...].
+        const outbox = request.transaction?.objectStore(OUTBOX_STORE);
+        if (outbox && !outbox.indexNames.contains("user_id")) {
+          outbox.createIndex("user_id", "user_id");
         }
       };
       request.onsuccess = () => resolve(request.result);

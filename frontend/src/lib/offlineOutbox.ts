@@ -12,11 +12,9 @@ import {
   OUTBOX_STORE,
   deleteFromStore,
   getAllFromIndex,
-  getAllFromStore,
   getFromStore,
   openOfflineDB,
-  putInStore,
-  userKeyRange
+  putInStore
 } from "./offlineDb";
 
 export type OutboxAttachment = {
@@ -170,7 +168,8 @@ async function withinQueueBudget(userID: number, incoming: OutboxRecord): Promis
 
 /** listOutboxForUser returns display-ready entries, oldest first. */
 export async function listOutboxForUser(userID: number): Promise<OutboxRecord[]> {
-  return sortOldestFirst(await getAllFromStore<OutboxRecord>(OUTBOX_STORE, userKeyRange(userID)));
+  const items = await getAllFromIndex<OutboxRecord>(OUTBOX_STORE, "user_id", IDBKeyRange.only(userID));
+  return sortOldestFirst(items);
 }
 
 async function countOutboxItems(userID: number, status?: OutboxRecord["status"]): Promise<number> {

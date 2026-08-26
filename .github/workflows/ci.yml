@@ -97,6 +97,28 @@ jobs:
 
           exit "$status"
 
+      - name: Run Frontend Tests
+        run: |
+          mkdir -p test-results
+          set +e
+          npm test -- --reporter=default 2>&1 | tee test-results/frontend-tests.log
+          status=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "### Frontend Tests"
+            echo
+            if [ "$status" -eq 0 ]; then
+              echo "Status: pass"
+            else
+              echo "Status: fail"
+            fi
+            echo
+            echo "Log: \`test-results/frontend-tests.log\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$status"
+
       - name: Build Frontend
         run: |
           mkdir -p test-results build-artifacts

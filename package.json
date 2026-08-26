@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build": "npm run typecheck && vite build && npm run build:plugins",
     "build:themes": "mkdir -p plugins/matrix_theme/frontend_dist/themes/matrix && sass plugins/matrix_theme/themes/matrix/theme.scss plugins/matrix_theme/frontend_dist/themes/matrix/theme.css --style=compressed",
     "build:plugins": "ROLLTOP_PLUGIN_TARGET=attachment_preview vite build --config vite.plugins.config.ts && ROLLTOP_PLUGIN_TARGET=bimi_brand_icons vite build --config vite.plugins.config.ts && ROLLTOP_PLUGIN_TARGET=gravatar_sender_icons vite build --config vite.plugins.config.ts && ROLLTOP_PLUGIN_TARGET=language_search vite build --config vite.plugins.config.ts && ROLLTOP_PLUGIN_TARGET=matrix_theme vite build --config vite.plugins.config.ts && npm run build:themes && ROLLTOP_PLUGIN_TARGET=mail_filters vite build --config vite.plugins.config.ts && npm run build:mail-filters-css && ROLLTOP_PLUGIN_TARGET=mail_mcp vite build --config vite.plugins.config.ts && ROLLTOP_PLUGIN_TARGET=remote_imap_sync vite build --config vite.plugins.config.ts && npm run build:remote-imap-sync-css && ROLLTOP_PLUGIN_TARGET=experimental_spam_filter vite build --config vite.plugins.config.ts && npm run build:experimental-spam-filter-css && ROLLTOP_PLUGIN_TARGET=one_click_unsubscribe vite build --config vite.plugins.config.ts && ROLLTOP_PLUGIN_TARGET=remote_image_blocklist vite build --config vite.plugins.config.ts && ROLLTOP_PLUGIN_TARGET=trusted_image_sources vite build --config vite.plugins.config.ts && ROLLTOP_PLUGIN_TARGET=client_side_pgp vite build --config vite.plugins.config.ts && npm run build:pgp-css",
@@ -32,6 +34,9 @@
   "devDependencies": {
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.3",
-    "sass": "^1.69.5"
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^30.0.1",
+    "sass": "^1.69.5",
+    "vitest": "^4.1.11"
   }
 }

@@ -48,6 +48,10 @@ Android 13 and newer require the runtime notification permission.
 
 Push registration and polling rely on the WebView login cookie for the configured Rolltop server. If the session expires, the app stops notifying until the user signs in again. The Rolltop server also needs outbound HTTPS access to the selected distributor endpoint.
 
+## Offline Mail
+
+The Android shell inherits the PWA offline behavior. The service worker caches a neutral, session-free app document, so reopening the app without signal boots into cached mail instead of an offline page: everything viewed in the last seven days is available (bodies for conversations that were opened, headers otherwise), search works over that downloaded corpus, and compose sends made offline wait in a sidebar Outbox and deliver automatically when connectivity returns. Cached mail is user-scoped device storage; logging out clears bodies and headers but keeps queued Outbox messages.
+
 ## Updates
 
 The updater checks:

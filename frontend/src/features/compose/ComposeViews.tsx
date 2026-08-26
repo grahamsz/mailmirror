@@ -8,8 +8,9 @@ import { api } from "../../api";
 import type { LocationState, Toast } from "../../appTypes";
 import type { ContactAutocomplete, ComposeAttachmentUpload, ComposeExistingAttachment, ComposeForm, ComposeIdentity } from "../../types";
 import { Icon, LogoMark } from "../../components/Icon";
-import { messageFromError } from "../../lib/errors";
+import { isNetworkError, messageFromError } from "../../lib/errors";
 import { textToHTML } from "../../lib/html";
+import { enqueueOfflineSend } from "../../lib/outbox";
 import {
   clearComposeRecovery,
   composeContentEqual,
@@ -253,6 +254,17 @@ export function ComposeBox({
   const [editorRevision, setEditorRevision] = useState(0);
   const [templates, setTemplates] = useState<LocalComposeTemplate[]>(() => loadComposeTemplates(userID));
   const [templateName, setTemplateName] = useState("");
+  const [offlineNow, setOfflineNow] = useState(() => typeof navigator !== "undefined" && navigator.onLine === false);
+
+  useEffect(() => {
+    const update = () => setOfflineNow(navigator.onLine === false);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const templateMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -704,13 +716,14 @@ export function ComposeBox({
       attach_public_key: composeSecurity.attachPublicKey
     };
     let sent = false;
+    let prepared: { form: ComposeForm; attachments: ComposeAttachmentUpload[] } | null = null;
     setSending(true);
     if (composeSecurity.active) {
       composeSecurity.setTransform({ active: true, phase: "plaintext", ciphertext: "" });
       await waitForFrame();
     }
     try {
-      const prepared = await composeSecurity.prepareSubmitForm(nextForm, uploadAttachments, (ciphertext) => {
+      prepared = await composeSecurity.prepareSubmitForm(nextForm, uploadAttachments, (ciphertext) => {
         composeSecurity.setTransform({ active: true, phase: "ciphertext", ciphertext });
       });
       if (composeSecurity.active) await delay(520);
@@ -720,6 +733,18 @@ export function ComposeBox({
       addToast("Message sent.");
       onSent();
     } catch (err) {
+      // No connectivity: queue the exact prepared payload and deliver it on
+      // reconnect instead of losing the compose.
+      if (isNetworkError(err) && prepared) {
+        const queued = await enqueueOfflineSend(userID, prepared.form, prepared.attachments);
+        if (queued) {
+          sent = true;
+          clearLocalComposeRecovery();
+          addToast("No connection — message saved to Outbox. It will send automatically once you're back online.");
+          onSent();
+          return;
+        }
+      }
       addToast(messageFromError(err), "error");
     } finally {
       if (!sent) composeSecurity.setTransform({ active: false, phase: "plaintext", ciphertext: "" });
@@ -788,6 +813,12 @@ export function ComposeBox({
             <button className="ghost" type="button" title="Discard recovered changes" aria-label="Discard recovered changes" onClick={discardPendingRecovery}>
               <Icon name="delete" />
             </button>
+          </div>
+        ) : null}
+        {offlineNow ? (
+          <div className="mail-cache-warning" role="status">
+            <Icon name="send" />
+            <span>You're offline — sending will queue this message in the Outbox and deliver it once you reconnect.</span>
           </div>
         ) : null}
         {!inline ? (

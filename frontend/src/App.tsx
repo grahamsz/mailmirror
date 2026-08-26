@@ -11,11 +11,13 @@ import { SetupPage, LoginPage, PasswordResetPage } from "./features/auth/AuthPag
 import { AppShell } from "./features/layout/AppShell";
 import { ComposeOverlay } from "./features/compose/ComposeViews";
 import { RouteView } from "./RouteView";
-import { messageFromError } from "./lib/errors";
+import { messageFromError, isNetworkError } from "./lib/errors";
 import { currentLocation, messageURL } from "./lib/routes";
 import { androidNativeAvailable, androidPushSubscription, registerAndroidPush, unregisterAndroidPush } from "./lib/androidNative";
 import { serverBuildIdentity, serverShellDiffers } from "./lib/shellFreshness";
 import { embeddedBootstrap } from "./lib/startup";
+import { clearOfflineSessions, loadOfflineSession, offlineBootstrap, saveOfflineSession } from "./lib/offlineSession";
+import { flushOutbox, refreshOutboxSnapshot } from "./lib/outbox";
 import { emptyRuntimePlugins, loadRuntimePlugins, type RuntimePlugins } from "./plugins/runtime";
 import { emptySecurityUnlockState, securityUnlockPlugin } from "./plugins/securityUnlock";
 import { defaultSwipePreferences } from "./lib/swipeActions";
@@ -45,6 +47,7 @@ const pluginThemeLinkID = "rolltop-plugin-theme-css";
 const notificationIconURL = "/icon.svg?v=transparent-logo-v2";
 const toastDurationMS = 4200;
 const undoToastDurationMS = 6000;
+const outboxFlushIntervalMS = 45_000;
 let inMemoryPushSubscriptionOwner = 0;
 
 function themeChoices(themes: ThemeDefinition[] | undefined): ThemeDefinition[] {
@@ -196,6 +199,27 @@ async function unsubscribeWebPush(csrf: string) {
 }
 
 /**
+ * Initial bootstrap resolves from the personalized HTML payload when present.
+ * Without it (neutral shell cold start), a persisted session lets an offline
+ * device boot straight into cached mail instead of the login page.
+ */
+function initialBootstrapState(): { bootstrap: Bootstrap | null; offline: boolean } {
+  const initial = embeddedBootstrap();
+  if (initial) {
+    if (initial.user) api.retainMailCacheForUser(initial.user.id);
+    return { bootstrap: initial, offline: false };
+  }
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    const saved = loadOfflineSession();
+    if (saved) {
+      api.retainMailCacheForUser(saved.user.id);
+      return { bootstrap: offlineBootstrap(saved), offline: true };
+    }
+  }
+  return { bootstrap: null, offline: false };
+}
+
+/**
  * App owns process-wide browser state: bootstrap/session data, current URL,
  * top-level toasts, SSE chrome refreshes, optimistic message hiding, and the
  * compose overlay. Feature views stay below RouteView so they can be remounted
@@ -203,11 +227,9 @@ async function unsubscribeWebPush(csrf: string) {
  */
 export default function App() {
   const [location, setLocation] = useState<LocationState>(() => currentLocation());
-  const [bootstrap, setBootstrap] = useState<Bootstrap | null>(() => {
-    const initial = embeddedBootstrap();
-    if (initial) api.retainMailCacheForUser(initial.user?.id || 0);
-    return initial;
-  });
+  const [{ bootstrap: initialBootstrap, offline: initialOffline }] = useState(initialBootstrapState);
+  const [bootstrap, setBootstrap] = useState<Bootstrap | null>(initialBootstrap);
+  const [offlineMode, setOfflineMode] = useState(initialOffline);
   const [runtimePlugins, setRuntimePlugins] = useState<RuntimePlugins>(() => emptyRuntimePlugins());
   const [bootError, setBootError] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -274,10 +296,22 @@ export default function App() {
       if (generation !== bootstrapGenerationRef.current) return null;
       api.retainMailCacheForUser(data.user?.id || 0);
       setBootstrap(data);
+      setOfflineMode(false);
       setBootError("");
       return data;
     } catch (err) {
       if (generation !== bootstrapGenerationRef.current) return null;
+      // A dropped connection should not strand a signed-in user at the error
+      // screen: fall back to the persisted session and cached views.
+      if (isNetworkError(err)) {
+        const saved = loadOfflineSession();
+        if (saved) {
+          api.retainMailCacheForUser(saved.user.id);
+          setBootstrap(offlineBootstrap(saved));
+          setOfflineMode(true);
+          return null;
+        }
+      }
       setBootError(messageFromError(err));
       return null;
     }
@@ -286,6 +320,33 @@ export default function App() {
   useEffect(() => {
     if (!bootstrappedFromHTMLRef.current) void refreshBootstrap();
   }, [refreshBootstrap]);
+
+  // Connectivity flips re-evaluate offline-dependent wiring (SSE, outbox).
+  const [connectionTick, setConnectionTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setConnectionTick((value) => value + 1);
+    window.addEventListener("online", bump);
+    window.addEventListener("offline", bump);
+    return () => {
+      window.removeEventListener("online", bump);
+      window.removeEventListener("offline", bump);
+    };
+  }, []);
+
+  // Persist a secret-free session snapshot so the next cold start can boot
+  // into cached mail with no network. Also nudge the service worker to keep
+  // its neutral app shell fresh for exactly that scenario.
+  const mailboxSignature = (bootstrap?.mailboxes || []).map((mailbox) => mailbox.id).join(",");
+  useEffect(() => {
+    if (!bootstrap?.user) return;
+    saveOfflineSession(bootstrap);
+    navigator.serviceWorker?.controller?.postMessage({ type: "rolltop:refresh-shell" });
+  }, [bootstrap?.user?.id, mailboxSignature]);
+
+  // The outbox replays queued sends whenever connectivity returns or the app
+  // wakes up; failures surface as toasts and stay retryable in the sidebar.
+  const activeUserID = bootstrap?.user?.id || 0;
+  const activeCSRF = bootstrap?.csrf || "";
 
   // A browser or Android wrapper can keep a SPA document alive across server
   // deployments. Check only after a real background/foreground transition and
@@ -421,6 +482,28 @@ export default function App() {
     },
     [settleToast]
   );
+
+  useEffect(() => {
+    if (!(activeUserID > 0) || !activeCSRF) return;
+    const runFlush = () => {
+      void flushOutbox(activeCSRF, activeUserID, {
+        onSent: (item) => addToast(`Outbox: sent "${item.subject}".`),
+        onFailed: (item) => addToast(`Outbox: "${item.subject}" failed: ${item.last_error}`, "error")
+      });
+    };
+    runFlush();
+    window.addEventListener("online", runFlush);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") runFlush();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    const interval = window.setInterval(runFlush, outboxFlushIntervalMS);
+    return () => {
+      window.removeEventListener("online", runFlush);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(interval);
+    };
+  }, [activeUserID, activeCSRF, addToast]);
 
   useEffect(() => {
     function flushDeferredToasts() {
@@ -664,6 +747,8 @@ export default function App() {
   // counts or sync progress. Malformed events are ignored so cached views remain usable.
   useEffect(() => {
     if (!bootstrap?.user) return;
+    // Offline sessions skip the stream entirely; the listener re-runs on reconnect.
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     const events = new EventSource("/api/events");
     events.addEventListener("chrome", (event) => {
       try {
@@ -701,7 +786,7 @@ export default function App() {
     return () => {
       events.close();
     };
-  }, [bootstrap?.user, notifyNewMail]);
+  }, [bootstrap?.user, notifyNewMail, connectionTick]);
 
   // Folder drag/drop hides rows optimistically only for moves. Ctrl/Cmd-drag
   // copies messages to the destination and leaves the source list untouched.
@@ -772,6 +857,7 @@ export default function App() {
     await api.logout(csrf);
     bootstrapGenerationRef.current += 1;
     if (bootstrap.user) api.clearMailCache(bootstrap.user.id);
+    clearOfflineSessions();
     applySecurityUnlock(emptySecurityUnlockState, true);
     setSecurityUnlockOpen(false);
     setSecurityUnlockIdentityID(null);

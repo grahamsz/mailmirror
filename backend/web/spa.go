@@ -39,7 +39,10 @@ func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "frontend has not been built; run npm run build", http.StatusServiceUnavailable)
 		return
 	}
-	if s.store != nil {
+	// shell=1 asks for the neutral app document with no embedded session data,
+	// letting the service worker cache it for offline cold starts.
+	neutralShell := r.URL.Query().Get("shell") == "1"
+	if !neutralShell && s.store != nil {
 		payload, payloadErr := s.bootstrapPayload(w, r)
 		if payloadErr != nil {
 			s.serverError(w, payloadErr)
@@ -54,9 +57,11 @@ func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "private, no-store")
-	// Vary:* also makes Cache.put reject this response while older service
-	// workers are being replaced, so personalized startup JSON cannot linger.
-	w.Header().Set("Vary", "*")
+	if !neutralShell {
+		// Vary:* also makes Cache.put reject this response while older service
+		// workers are being replaced, so personalized startup JSON cannot linger.
+		w.Header().Set("Vary", "*")
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(contents)
 }

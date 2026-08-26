@@ -1,7 +1,7 @@
 // File overview: Authenticated application chrome: top bar, search entry, folder sidebar, mobile
 // drawer, drag-to-folder handling, sync status, and the mobile compose affordance.
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import type { DragEvent, FormEvent, MouseEvent, ReactNode } from "react";
 import { api } from "../../api";
 import type { AppShellProps, LocationState, MessageTransferAction, MoveTarget, SecurityUnlockState } from "../../appTypes";
@@ -11,6 +11,15 @@ import { androidNativeAvailable, shouldAdvertiseAndroidApp } from "../../lib/and
 import { folderTree, nodeContainsMailbox, type FolderNode } from "../../lib/folders";
 import { shouldIgnoreMailShortcut } from "../../lib/keyboard";
 import { mailRoute, mailURL, searchRoute, searchURL, currentLocation } from "../../lib/routes";
+import {
+  discardQueuedSend,
+  flushOutbox,
+  getOutboxSnapshot,
+  listOutboxForUser,
+  retryQueuedSend,
+  subscribeOutbox
+} from "../../lib/outbox";
+import type { OutboxRecord } from "../../lib/offlineStore";
 import { createPluginSet } from "../../plugins/registry";
 import { SearchAutocomplete, useSearchAutocomplete } from "./SearchAutocomplete";
 
@@ -399,6 +408,7 @@ export function AppShell({
           <button className="mobile-sidebar-scrim" type="button" aria-label="Close folders" onClick={closeMobileSidebar} />
         ) : null}
         <Sidebar
+          userID={user.id}
           mailboxes={mailboxes}
           csrf={csrf}
           latestSyncRun={latestSyncRun}
@@ -748,6 +758,7 @@ function Topbar({
 // Sidebar turns flat mailbox summaries into a tree, supports folder navigation,
 // and accepts dragged message IDs from the message list.
 function Sidebar({
+  userID,
   mailboxes,
   csrf,
   latestSyncRun,
@@ -769,6 +780,7 @@ function Sidebar({
   touchDropID,
   onClose
 }: {
+  userID: number;
   mailboxes: Mailbox[];
   csrf: string;
   latestSyncRun: SyncRun | null;
@@ -987,6 +999,7 @@ function Sidebar({
     >
       <span className="folder-name"><Icon name="clock" weight={snoozedActive ? "bold" : undefined} />Snoozed</span>
     </a>
+        <OutboxSidebarItem userID={userID} csrf={csrf} />
         <div className="side-section">Folders</div>
         {accountGroups.map((group) => (
           <div className="account-folder-group" key={group.key}>
@@ -1022,6 +1035,73 @@ function Sidebar({
         GNU AGPLv3-or-later
       </div>
     </aside>
+  );
+}
+
+/**
+ * OutboxSidebarItem appears only when sends are queued or failed. It lists
+ * pending messages inline so offline-composed mail stays visible and manageable.
+ */
+function OutboxSidebarItem({ userID, csrf }: { userID: number; csrf: string }) {
+  const snapshot = useSyncExternalStore(subscribeOutbox, getOutboxSnapshot);
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<OutboxRecord[]>([]);
+  const total = snapshot.queued + snapshot.failed;
+
+  const reload = useCallback(async () => {
+    if (!(userID > 0)) {
+      setItems([]);
+      return;
+    }
+    setItems(await listOutboxForUser(userID));
+  }, [userID]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload, snapshot.queued, snapshot.failed]);
+
+  if (total === 0) return null;
+
+  const retryNow = async (item: OutboxRecord) => {
+    if (!item.id) return;
+    await retryQueuedSend(item.id);
+    await flushOutbox(csrf, userID);
+  };
+
+  const discard = async (item: OutboxRecord) => {
+    if (!item.id) return;
+    await discardQueuedSend(item.id);
+    void reload();
+  };
+
+  return (
+    <div className="outbox">
+      <button type="button" className="folder outbox-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <span className="folder-name"><Icon name="send" weight={open ? "bold" : undefined} />Outbox</span>
+        <span className="folder-count">{total}</span>
+      </button>
+      {open ? (
+        <div className="outbox-list" role="region" aria-label="Queued messages">
+          {items.map((item) => item.id ? (
+            <div key={item.id} className={`outbox-entry ${item.status}`}>
+              <span className="outbox-entry-subject">{item.subject || "(no subject)"}</span>
+              <span className="outbox-entry-meta">
+                {item.status === "queued"
+                  ? `Waiting to send${item.recipients ? ` to ${item.recipients}` : ""}`
+                  : `${item.last_error || "Sending failed"}`}
+              </span>
+              <span className="outbox-entry-actions">
+                {item.status === "failed" ? (
+                  <button className="ghost text-link" type="button" onClick={() => void retryNow(item)}>Retry</button>
+                ) : null}
+                <button className="ghost text-link" type="button" onClick={() => void discard(item)}>Discard</button>
+              </span>
+            </div>
+          ) : null)}
+          {items.length === 0 ? <div className="outbox-empty">Reading queue...</div> : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

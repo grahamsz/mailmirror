@@ -9,9 +9,10 @@ import type { DatePrefs, LocationState, SecurityUnlockState, Toast } from "../..
 import type { Attachment, AuthenticationResult, Bootstrap, ComposeForm, ComposeIdentity, ContactPGPKey, HeaderDetail, Mailbox, MessageOriginalSource, MessageSecurityIndicators, SearchExplanation, ThreadMessage } from "../../types";
 import { Icon } from "../../components/Icon";
 import { androidNativeAvailable } from "../../lib/androidNative";
-import { messageFromError } from "../../lib/errors";
+import { isNetworkError, messageFromError } from "../../lib/errors";
 import { displayDateTime, displaySnoozeUntil, displayTime, formatBytes } from "../../lib/format";
 import { shouldIgnoreMailShortcut } from "../../lib/keyboard";
+import { getCachedThread, recordThreadPayload, type OfflineThreadPayload } from "../../lib/offlineStore";
 import { HighlightedText, highlightEmailDocument } from "../../lib/searchHighlight";
 import { messageBackURL, messageHighlightQuery, messageHighlightTerms, messageSearchHitID } from "../../lib/routes";
 import { ComposeBox } from "../compose/ComposeViews";
@@ -896,6 +897,7 @@ export function ThreadView({
   const [loadStatus, setLoadStatus] = useState<MessageLoadStatus | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [offlineCopySavedAt, setOfflineCopySavedAt] = useState(0);
   const pluginKey = enabledPlugins.join("|");
   const pluginSet = useMemo(() => createPluginSet(enabledPlugins), [pluginKey]);
   const securityPlugin = useMemo(() => threadSecurityPlugin(messageSecurityPlugins), [messageSecurityPlugins]);
@@ -935,6 +937,7 @@ export function ThreadView({
     async (images: boolean) => {
       setLoading(true);
       setError("");
+      setOfflineCopySavedAt(0);
       setLoadStatus(null);
       setOriginalSource(null);
       setMessagePluginPanel(null);
@@ -946,21 +949,35 @@ export function ThreadView({
       autoPGPVerificationRef.current = new Set();
       setSearchExplanations({});
       let statusTimer = 0;
+      const applyPayload = (data: OfflineThreadPayload) => {
+        setThread(data.thread);
+        setSubject(data.message.subject || "(no subject)");
+        setMailboxID(data.mailbox_id);
+        setSnoozedUntil(data.snoozed_until || "");
+        setComposeFrom(data.compose_from);
+        setFromIdentities(data.from_identities || []);
+        setExpanded(new Set(data.thread.filter((item) => item.expanded).map((item) => item.message.id)));
+      };
       try {
         const status = await api.messageLoadStatus(id).catch(() => null);
         if (shouldShowLoadStatus(status)) {
           statusTimer = window.setTimeout(() => setLoadStatus(status), 250);
         }
         const data = await api.message(id, images, highlightQuery);
-        setThread(data.thread);
-        setSubject(data.message.subject || "(no subject)");
-        setMailboxID(data.mailbox_id);
-    setSnoozedUntil(data.snoozed_until || "");
-        setComposeFrom(data.compose_from);
-        setFromIdentities(data.from_identities || []);
-        setExpanded(new Set(data.thread.filter((item) => item.expanded).map((item) => item.message.id)));
+        applyPayload(data);
+        // Keep the rendered conversation available offline for seven days.
+        void recordThreadPayload(userID, data);
         void refreshChrome();
       } catch (err) {
+        if (isNetworkError(err)) {
+          const saved = await getCachedThread(userID, Number(id) || 0);
+          if (saved) {
+            applyPayload(saved.payload);
+            setOfflineCopySavedAt(saved.saved_at);
+            setLoading(false);
+            return;
+          }
+        }
         setError(messageFromError(err));
       } finally {
         if (statusTimer) window.clearTimeout(statusTimer);
@@ -968,7 +985,7 @@ export function ThreadView({
         setLoading(false);
       }
     },
-    [highlightQuery, id, refreshChrome]
+    [highlightQuery, id, refreshChrome, userID]
   );
 
   useEffect(() => {
@@ -1636,6 +1653,11 @@ export function ThreadView({
           {mailbox ? <span className="label-pill">{mailbox.name}</span> : null}
         </div>
       </div>
+      {offlineCopySavedAt ? (
+        <div className="mail-cache-warning" role="status">
+          You're offline — showing the saved copy from {displayDateTime(new Date(offlineCopySavedAt).toISOString(), datePrefs)}. Attachments and live actions need a connection.
+        </div>
+      ) : null}
       {error ? <div className="error">{error}</div> : null}
       {loading ? <div className="panel muted">Loading conversation...</div> : null}
       {loadStatus ? (

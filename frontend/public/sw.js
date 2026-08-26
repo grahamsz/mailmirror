@@ -1,11 +1,17 @@
-const STATIC_CACHE = "rolltop-static-v9";
+const STATIC_CACHE = "rolltop-static-v10";
 const STATIC_ASSETS = ["/offline.html", "/manifest.webmanifest", "/icon.svg", "/icon.svg?v=transparent-logo-v2"];
+// The neutral shell is the app document without embedded session data (the
+// server only serves it for ?shell=1). It lets a cold app start boot the SPA
+// into cached mail instead of the offline page.
+const SHELL_URL = "/mail?shell=1";
+const SHELL_MAX_AGE_MS = 20 * 60 * 60 * 1000;
 let securityUnlockUserID = 0;
 let securityUnlockState = { unlockedUntil: 0, keys: [] };
 let securityUnlockTimer = 0;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(STATIC_CACHE).then((cache) => cache.addAll(STATIC_ASSETS)));
+  event.waitUntil(primeShell());
   self.skipWaiting();
 });
 
@@ -17,6 +23,28 @@ self.addEventListener("activate", (event) => {
   );
   self.clients.claim();
 });
+
+async function primeShell() {
+  try {
+    const res = await fetch(SHELL_URL, { credentials: "omit", cache: "no-store" });
+    if (!res.ok) return;
+    const text = await res.text();
+    // Defense in depth: never store a document that carries session data.
+    // The inert <meta> marker is expected; the injected script is not.
+    if (text.includes('<script id="rolltop-startup"')) return;
+    const headers = new Headers({ "Content-Type": "text/html; charset=utf-8", "X-Rolltop-Shell-Stored": String(Date.now()) });
+    const cache = await caches.open(STATIC_CACHE);
+    await cache.put(SHELL_URL, new Response(text, { status: 200, headers }));
+  } catch {
+    // Priming while offline is fine; an older cached shell still works.
+  }
+}
+
+function shellIsStale(res) {
+  if (!res) return true;
+  const storedAt = Number(res.headers.get("X-Rolltop-Shell-Stored") || 0);
+  return !storedAt || Date.now() - storedAt > SHELL_MAX_AGE_MS;
+}
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
@@ -36,7 +64,23 @@ self.addEventListener("fetch", (event) => {
   if (req.mode === "navigate" || acceptsHTML) {
     const networkRequest = new Request(req, { cache: "no-cache" });
     event.respondWith(
-      fetch(networkRequest).catch(() => req.mode === "navigate" ? caches.match("/offline.html") : Promise.reject(new Error("offline")))
+      fetch(networkRequest)
+        .then((res) => {
+          if (req.mode === "navigate") {
+            event.waitUntil(
+              caches.match(SHELL_URL).then((cached) => {
+                if (shellIsStale(cached)) return primeShell();
+              })
+            );
+          }
+          return res;
+        })
+        .catch(() => {
+          if (req.mode !== "navigate") return Promise.reject(new Error("offline"));
+          // Offline cold start: boot the neutral shell so the app can render
+          // cached mail; fall back to the offline page before it was ever primed.
+          return caches.match(SHELL_URL).then((shell) => shell || caches.match("/offline.html"));
+        })
     );
     return;
   }
@@ -139,6 +183,10 @@ function isNotificationWarmAPIURL(url) {
 
 self.addEventListener("message", (event) => {
   const data = event.data || {};
+  if (data.type === "rolltop:refresh-shell") {
+    event.waitUntil(primeShell());
+    return;
+  }
   if (data.type === "rolltop:security-unlock-get") {
     const userID = Number(data.userID || 0);
     const state = currentSecurityUnlockState(userID);

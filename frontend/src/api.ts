@@ -29,6 +29,11 @@ import type {
   User
 } from "./types";
 import { clearMailSnapshots, clearOtherMailSnapshots, loadMailSnapshot, saveMailSnapshot } from "./lib/mailSnapshot";
+import {
+  clearOfflineMailDataForUser,
+  recordMailConversations,
+  retainOfflineDataForUser
+} from "./lib/offlineStore";
 
 /** Error thrown for non-2xx API responses after the JSON error payload is decoded. */
 export class ApiError extends Error {
@@ -244,6 +249,9 @@ async function loadMail(userID: number, mailboxID: string | null, page: number):
     return data;
   }
   saveMailSnapshot(userID, mailboxID, page, data);
+  // Every conversation the user sees becomes an offline header row; opening a
+  // message later upgrades it to a full cached body.
+  void recordMailConversations(userID, data.conversations);
   return data;
 }
 
@@ -259,6 +267,7 @@ function clearMailCache(userID: number) {
     if (key.startsWith(prefix)) getCache.delete(key);
   }
   clearMailSnapshots(userID);
+  void clearOfflineMailDataForUser(userID);
 }
 
 function retainMailCacheForUser(userID: number) {
@@ -270,6 +279,7 @@ function retainMailCacheForUser(userID: number) {
     if (match && Number(match[1]) !== userID) getCache.delete(key);
   }
   clearOtherMailSnapshots(userID);
+  void retainOfflineDataForUser(userID);
 }
 
 

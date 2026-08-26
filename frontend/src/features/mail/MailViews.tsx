@@ -10,9 +10,11 @@ import type { Bootstrap, Conversation, Mailbox, SwipeAction, SwipePreferences, S
 import { Icon } from "../../components/Icon";
 import { ListHeader } from "../../components/common";
 import { androidNativeAvailable } from "../../lib/androidNative";
-import { messageFromError } from "../../lib/errors";
+import { isNetworkError, messageFromError } from "../../lib/errors";
 import { displaySnoozeUntil, displayTime } from "../../lib/format";
 import { shouldIgnoreMailShortcut } from "../../lib/keyboard";
+import { buildRecentOfflinePage } from "../../lib/offlineStore";
+import { offlineSearch } from "../../lib/offlineSearch";
 import { effectiveMailboxSyncMode, mailboxActiveRun, mailboxNeedsSync, mailboxRefreshKey } from "../../lib/sync";
 import { HighlightedText } from "../../lib/searchHighlight";
 import { mailPageSize } from "../../lib/constants";
@@ -279,26 +281,38 @@ export function MailView({
         if (data.has_next) api.prefetchMail(userID, mailboxID, page + 1);
         if (data.has_prev && page > 1) api.prefetchMail(userID, mailboxID, page - 1);
       })
-      .catch((err) => {
-        if (!cancelled) {
-          const cached = api.cachedMail(userID, mailboxID, page);
-          previousListKey.current = listKey;
-          if (cached) {
-            previousPageIDs.current = new Set(cached.conversations.map((conversation) => conversation.message.id));
-            setConversations(cached.conversations);
-            setHasPrev(cached.has_prev);
-            setHasNext(cached.has_next);
-            setShowingSavedPage(true);
-            setError(`Showing saved mail. Refresh failed: ${messageFromError(err)}`);
-          } else {
-            previousPageIDs.current = new Set();
-            setConversations([]);
+      .catch(async (err) => {
+        if (cancelled) return;
+        previousListKey.current = listKey;
+        const cached = api.cachedMail(userID, mailboxID, page);
+        if (cached) {
+          previousPageIDs.current = new Set(cached.conversations.map((conversation) => conversation.message.id));
+          setConversations(cached.conversations);
+          setHasPrev(cached.has_prev);
+          setHasNext(cached.has_next);
+          setShowingSavedPage(true);
+          setError(`Showing saved mail. Refresh failed: ${messageFromError(err)}`);
+          return;
+        }
+        if (isNetworkError(err)) {
+          const offlinePage = await buildRecentOfflinePage(userID, mailboxID, page, mailPageSize);
+          if (cancelled) return;
+          if (offlinePage) {
+            previousPageIDs.current = new Set(offlinePage.conversations.map((conversation) => conversation.message.id));
+            setConversations(offlinePage.conversations);
             setHasPrev(false);
             setHasNext(false);
-            setShowingSavedPage(false);
-            setError(messageFromError(err));
+            setShowingSavedPage(true);
+            setError(`You're offline. Showing recently viewed mail (${offlinePage.total} cached).`);
+            return;
           }
         }
+        previousPageIDs.current = new Set();
+        setConversations([]);
+        setHasPrev(false);
+        setHasNext(false);
+        setShowingSavedPage(false);
+        setError(messageFromError(err));
       })
       .finally(() => {
         if (!cancelled) {
@@ -701,6 +715,7 @@ function SearchMaintenanceNotice({ run }: { run: SyncRun }) {
  */
 export function SearchView({
   csrf,
+  userID,
   location,
   navigate,
   hiddenMessageIDs,
@@ -713,6 +728,7 @@ export function SearchView({
   addToast
 }: {
   csrf: string;
+  userID: number;
   location: LocationState;
   navigate: (url: string) => void;
   hiddenMessageIDs: Set<number>;
@@ -727,6 +743,7 @@ export function SearchView({
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [offlineNotice, setOfflineNotice] = useState("");
   const [hasPrev, setHasPrev] = useState(false);
   const [hasNext, setHasNext] = useState(false);
   const loadedKey = useRef("");
@@ -744,6 +761,24 @@ export function SearchView({
     setHasPrev(false);
     setHasNext(false);
     setError("");
+    setOfflineNotice("");
+    const showLocalResults = async (prefix: string) => {
+      const result = await offlineSearch(userID, query, page);
+      if (cancelled) return;
+      loadedKey.current = searchKey;
+      setConversations(result.conversations);
+      setHasPrev(result.has_prev);
+      setHasNext(result.has_next);
+      setOfflineNotice(
+        `${prefix}${result.total} ${result.total === 1 ? "match" : "matches"} in downloaded messages.`
+      );
+    };
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      void showLocalResults("You're offline. ");
+      return () => {
+        cancelled = true;
+      };
+    }
     api
       .search(query, page)
       .then((data) => {
@@ -752,16 +787,20 @@ export function SearchView({
         setConversations(data.conversations);
         setHasPrev(data.has_prev);
         setHasNext(data.has_next);
+        setOfflineNotice("");
         if (data.has_next) api.prefetchSearch(query, page + 1);
       })
-      .catch((err) => {
-        if (!cancelled) {
-          loadedKey.current = searchKey;
-          setConversations([]);
-          setHasPrev(false);
-          setHasNext(false);
-          setError(messageFromError(err));
+      .catch(async (err) => {
+        if (cancelled) return;
+        if (isNetworkError(err)) {
+          await showLocalResults("Can't reach the server. Searching downloaded mail. ");
+          return;
         }
+        loadedKey.current = searchKey;
+        setConversations([]);
+        setHasPrev(false);
+        setHasNext(false);
+        setError(messageFromError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -769,7 +808,7 @@ export function SearchView({
     return () => {
       cancelled = true;
     };
-  }, [query, page, searchKey]);
+  }, [query, page, searchKey, userID]);
 
   const pageURL = (nextPage: number) => searchURL(query, nextPage);
   const returnURL = routeWithSearch(location.path, location.search);
@@ -826,6 +865,7 @@ export function SearchView({
         </div>
       ) : null}
       {maintenanceRun ? <SearchMaintenanceNotice run={maintenanceRun} /> : null}
+      {offlineNotice ? <div className="mail-cache-warning" role="status">{offlineNotice}</div> : null}
       {error ? <div className="error">{error}</div> : null}
       {!error ? (
         <SlidingMessageListStage stageKey={searchKey} direction={slideDirection} pending={listPending} speed={listPending ? "slow" : "fast"}>

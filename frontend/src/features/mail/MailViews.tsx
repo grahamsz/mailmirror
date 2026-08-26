@@ -13,7 +13,7 @@ import { androidNativeAvailable } from "../../lib/androidNative";
 import { isNetworkError, messageFromError } from "../../lib/errors";
 import { displaySnoozeUntil, displayTime } from "../../lib/format";
 import { shouldIgnoreMailShortcut } from "../../lib/keyboard";
-import { buildRecentOfflinePage } from "../../lib/offlineStore";
+import { buildRecentOfflinePage } from "../../lib/offlineMailCache";
 import { offlineSearch } from "../../lib/offlineSearch";
 import { effectiveMailboxSyncMode, mailboxActiveRun, mailboxNeedsSync, mailboxRefreshKey } from "../../lib/sync";
 import { HighlightedText } from "../../lib/searchHighlight";

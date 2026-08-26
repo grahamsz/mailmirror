@@ -33,7 +33,7 @@ import {
   clearOfflineMailDataForUser,
   recordMailConversations,
   retainOfflineDataForUser
-} from "./lib/offlineStore";
+} from "./lib/offlineMailCache";
 
 /** Error thrown for non-2xx API responses after the JSON error payload is decoded. */
 export class ApiError extends Error {

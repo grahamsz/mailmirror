@@ -18,8 +18,8 @@ import {
   listOutboxForUser,
   retryQueuedSend,
   subscribeOutbox
-} from "../../lib/outbox";
-import type { OutboxRecord } from "../../lib/offlineStore";
+} from "../../lib/offlineOutbox";
+import type { OutboxRecord } from "../../lib/offlineOutbox";
 import { createPluginSet } from "../../plugins/registry";
 import { SearchAutocomplete, useSearchAutocomplete } from "./SearchAutocomplete";
 

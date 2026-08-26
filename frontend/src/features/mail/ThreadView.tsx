@@ -12,7 +12,7 @@ import { androidNativeAvailable } from "../../lib/androidNative";
 import { isNetworkError, messageFromError } from "../../lib/errors";
 import { displayDateTime, displaySnoozeUntil, displayTime, formatBytes } from "../../lib/format";
 import { shouldIgnoreMailShortcut } from "../../lib/keyboard";
-import { getCachedThread, recordThreadPayload, type OfflineThreadPayload } from "../../lib/offlineStore";
+import { getCachedThread, recordThreadPayload, type OfflineThreadPayload } from "../../lib/offlineMailCache";
 import { HighlightedText, highlightEmailDocument } from "../../lib/searchHighlight";
 import { messageBackURL, messageHighlightQuery, messageHighlightTerms, messageSearchHitID } from "../../lib/routes";
 import { ComposeBox } from "../compose/ComposeViews";

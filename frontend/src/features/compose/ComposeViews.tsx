@@ -10,7 +10,7 @@ import type { ContactAutocomplete, ComposeAttachmentUpload, ComposeExistingAttac
 import { Icon, LogoMark } from "../../components/Icon";
 import { isNetworkError, messageFromError } from "../../lib/errors";
 import { textToHTML } from "../../lib/html";
-import { enqueueOfflineSend } from "../../lib/outbox";
+import { enqueueOfflineSend } from "../../lib/offlineOutbox";
 import {
   clearComposeRecovery,
   composeContentEqual,

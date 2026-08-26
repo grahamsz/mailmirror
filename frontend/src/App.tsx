@@ -17,7 +17,7 @@ import { androidNativeAvailable, androidPushSubscription, registerAndroidPush, u
 import { serverBuildIdentity, serverShellDiffers } from "./lib/shellFreshness";
 import { embeddedBootstrap } from "./lib/startup";
 import { clearOfflineSessions, loadOfflineSession, offlineBootstrap, saveOfflineSession } from "./lib/offlineSession";
-import { flushOutbox, refreshOutboxSnapshot } from "./lib/outbox";
+import { refreshOutboxSnapshot, startAutoFlush } from "./lib/offlineOutbox";
 import { emptyRuntimePlugins, loadRuntimePlugins, type RuntimePlugins } from "./plugins/runtime";
 import { emptySecurityUnlockState, securityUnlockPlugin } from "./plugins/securityUnlock";
 import { defaultSwipePreferences } from "./lib/swipeActions";
@@ -47,7 +47,6 @@ const pluginThemeLinkID = "rolltop-plugin-theme-css";
 const notificationIconURL = "/icon.svg?v=transparent-logo-v2";
 const toastDurationMS = 4200;
 const undoToastDurationMS = 6000;
-const outboxFlushIntervalMS = 45_000;
 let inMemoryPushSubscriptionOwner = 0;
 
 function themeChoices(themes: ThemeDefinition[] | undefined): ThemeDefinition[] {
@@ -485,24 +484,11 @@ export default function App() {
 
   useEffect(() => {
     if (!(activeUserID > 0) || !activeCSRF) return;
-    const runFlush = () => {
-      void flushOutbox(activeCSRF, activeUserID, {
-        onSent: (item) => addToast(`Outbox: sent "${item.subject}".`),
-        onFailed: (item) => addToast(`Outbox: "${item.subject}" failed: ${item.last_error}`, "error")
-      });
-    };
-    runFlush();
-    window.addEventListener("online", runFlush);
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") runFlush();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    const interval = window.setInterval(runFlush, outboxFlushIntervalMS);
-    return () => {
-      window.removeEventListener("online", runFlush);
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.clearInterval(interval);
-    };
+    void refreshOutboxSnapshot(activeUserID);
+    return startAutoFlush(activeCSRF, activeUserID, {
+      onSent: (item) => addToast(`Outbox: sent "${item.subject}".`),
+      onFailed: (item) => addToast(`Outbox: "${item.subject}" failed: ${item.last_error}`, "error")
+    });
   }, [activeUserID, activeCSRF, addToast]);
 
   useEffect(() => {

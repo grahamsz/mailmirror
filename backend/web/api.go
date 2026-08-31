@@ -4,6 +4,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -151,6 +152,7 @@ func writeJSONCached(w http.ResponseWriter, r *http.Request, value any) {
 func writeJSONCachedWithETag(w http.ResponseWriter, r *http.Request, value any) (string, bool) {
 	body, etag, err := cachedJSONBody(value)
 	if err != nil {
+		logHandlerError(r, fmt.Errorf("encode cached JSON response: %w", err))
 		writeAPIError(w, http.StatusInternalServerError, "failed to encode response")
 		return "", false
 	}

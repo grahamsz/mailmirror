@@ -37,7 +37,7 @@ func (s *Server) apiCompose(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		identities := s.composeIdentities(r.Context(), cu)

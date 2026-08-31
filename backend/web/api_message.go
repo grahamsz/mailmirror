@@ -106,12 +106,12 @@ func (s *Server) apiMessagePrefetch(w http.ResponseWriter, r *http.Request, id i
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	thread, err := s.store.ListThreadMessagesForUser(r.Context(), cu.User.ID, msg)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	for _, threadMsg := range thread {
@@ -142,14 +142,14 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request, id int64) {
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	stop = timing.measure(&timing.hydrate)
 	views, msg, err := s.threadViewsForMessageTimed(r.Context(), cu, msg, r.URL.Query().Get("images") == "1", r.URL.Query().Get("q"), timing)
 	stop()
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	stop = timing.measure(&timing.render)
@@ -167,7 +167,7 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request, id int64) {
 		} else {
 			acknowledged, ackErr := s.store.AcknowledgeDueSnoozeForUser(r.Context(), cu.User.ID, msg.ID, time.Now().UTC())
 			if ackErr != nil {
-				s.serverError(w, ackErr)
+				s.serverError(w, r, ackErr)
 				return
 			}
 			if acknowledged {
@@ -175,7 +175,7 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request, id int64) {
 			}
 		}
 	} else if !errors.Is(snoozeErr, sql.ErrNoRows) {
-		s.serverError(w, snoozeErr)
+		s.serverError(w, r, snoozeErr)
 		return
 	}
 	writeMessageTimingHeaders(w, timing)
@@ -215,7 +215,7 @@ func (s *Server) apiMessageOriginal(w http.ResponseWriter, r *http.Request, id i
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	raw, err := s.rawMessageBytes(r.Context(), cu.User.ID, msg)
@@ -305,7 +305,7 @@ func (s *Server) apiMessageSearchExplanation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	rawQuery := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -316,7 +316,7 @@ func (s *Server) apiMessageSearchExplanation(w http.ResponseWriter, r *http.Requ
 	query, _ := stripStarSearchOperators(rawQuery)
 	cleanQuery, mailboxFilter, err := s.searchMailboxFilter(r.Context(), cu.User.ID, query)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	query = strings.TrimSpace(cleanQuery)
@@ -327,7 +327,7 @@ func (s *Server) apiMessageSearchExplanation(w http.ResponseWriter, r *http.Requ
 	exactHitID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("hit")), 10, 64)
 	threadMessages, err := s.store.ListThreadMessagesForUser(r.Context(), cu.User.ID, msg)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	candidateIDs := make([]int64, 0, len(threadMessages)+2)
@@ -351,7 +351,7 @@ func (s *Server) apiMessageSearchExplanation(w http.ResponseWriter, r *http.Requ
 	if exactHitID > 0 && exactHitID != msg.ID {
 		hitMsg, err := s.store.GetMessageForUser(r.Context(), cu.User.ID, exactHitID)
 		if err != nil && !store.IsNotFound(err) {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		if err == nil {
@@ -370,7 +370,7 @@ func (s *Server) apiMessageSearchExplanation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if _, repairErr := s.ensureSearchDocuments(r.Context(), cu.User.ID, candidateMessages); repairErr != nil {
-		s.serverError(w, repairErr)
+		s.serverError(w, r, repairErr)
 		return
 	}
 	opts, _ := s.searchExplanationOptions(r.Context(), cu.User, msg)
@@ -379,21 +379,21 @@ func (s *Server) apiMessageSearchExplanation(w http.ResponseWriter, r *http.Requ
 	if seenCandidates[msg.ID] {
 		result, matched, err = s.search.ExplainMessageWithOptions(r.Context(), cu.User.ID, msg.ID, query, opts)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 	}
 	if !matched && exactHitID > 0 && exactHitID != msg.ID && seenCandidates[exactHitID] {
 		result, matched, err = s.search.ExplainMessageWithOptions(r.Context(), cu.User.ID, exactHitID, query, opts)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 	}
 	if !matched {
 		result, matched, err = s.search.ExplainMessagesWithOptions(r.Context(), cu.User.ID, candidateIDs, query, opts)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 	}
@@ -670,12 +670,12 @@ func (s *Server) apiMessageLoadStatus(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	threadMessages, err := s.store.ListThreadMessagesForUser(r.Context(), cu.User.ID, msg)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	imapFetchCount := 0
@@ -764,19 +764,19 @@ func (s *Server) apiMoveMessage(w http.ResponseWriter, r *http.Request, id int64
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	refreshMailboxes, err := s.moveRefreshMailboxNames(r.Context(), cu.User.ID, []int64{id}, dest)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	finishForeground := func() {}
 	if s.syncRunner != nil {
 		finishForeground, err = s.syncRunner.BeginForegroundOperation(r.Context(), cu.User.ID)
 		if err != nil {
-			writeAPIError(w, http.StatusServiceUnavailable, "could not schedule message move")
+			s.apiError(w, r, http.StatusServiceUnavailable, "could not schedule message move", err)
 			return
 		}
 	}
@@ -786,7 +786,7 @@ func (s *Server) apiMoveMessage(w http.ResponseWriter, r *http.Request, id int64
 			http.NotFound(w, r)
 			return
 		}
-		writeAPIError(w, http.StatusBadGateway, "could not move message")
+		s.apiError(w, r, http.StatusBadGateway, "could not move message", err)
 		return
 	}
 	s.startMoveRefresh(cu.User.ID, dest.AccountID, refreshMailboxes)
@@ -878,12 +878,12 @@ func (s *Server) apiBulkMoveMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	refreshMailboxes, err := s.moveRefreshMailboxNames(r.Context(), cu.User.ID, in.MessageIDs, dest)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	if len(in.MessageIDs) > 5 {
@@ -891,7 +891,7 @@ func (s *Server) apiBulkMoveMessages(w http.ResponseWriter, r *http.Request) {
 		if s.syncRunner != nil {
 			finishForeground, err = s.syncRunner.BeginForegroundOperation(r.Context(), cu.User.ID)
 			if err != nil {
-				writeAPIError(w, http.StatusServiceUnavailable, "could not schedule bulk move")
+				s.apiError(w, r, http.StatusServiceUnavailable, "could not schedule bulk move", err)
 				return
 			}
 		}
@@ -905,7 +905,7 @@ func (s *Server) apiBulkMoveMessages(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
-			writeAPIError(w, http.StatusBadGateway, "could not start bulk move")
+			s.apiError(w, r, http.StatusBadGateway, "could not start bulk move", err)
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "queued": true, "run_id": run.ID, "mailbox": dest.Name})
@@ -915,7 +915,7 @@ func (s *Server) apiBulkMoveMessages(w http.ResponseWriter, r *http.Request) {
 	if s.syncRunner != nil {
 		finishForeground, err = s.syncRunner.BeginForegroundOperation(r.Context(), cu.User.ID)
 		if err != nil {
-			writeAPIError(w, http.StatusServiceUnavailable, "could not schedule bulk move")
+			s.apiError(w, r, http.StatusServiceUnavailable, "could not schedule bulk move", err)
 			return
 		}
 	}
@@ -926,7 +926,7 @@ func (s *Server) apiBulkMoveMessages(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		writeAPIError(w, http.StatusBadGateway, "could not move messages")
+		s.apiError(w, r, http.StatusBadGateway, "could not move messages", err)
 		return
 	}
 	s.startMoveRefresh(cu.User.ID, dest.AccountID, refreshMailboxes)
@@ -970,7 +970,7 @@ func (s *Server) apiBulkCopyMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	refreshDest := func() {
@@ -983,7 +983,7 @@ func (s *Server) apiBulkCopyMessages(w http.ResponseWriter, r *http.Request) {
 		if s.syncRunner != nil {
 			finishForeground, err = s.syncRunner.BeginForegroundOperation(r.Context(), cu.User.ID)
 			if err != nil {
-				writeAPIError(w, http.StatusServiceUnavailable, "could not schedule bulk copy")
+				s.apiError(w, r, http.StatusServiceUnavailable, "could not schedule bulk copy", err)
 				return
 			}
 		}
@@ -997,7 +997,7 @@ func (s *Server) apiBulkCopyMessages(w http.ResponseWriter, r *http.Request) {
 				writeAPIError(w, http.StatusBadRequest, "copy source or destination is no longer available")
 				return
 			}
-			writeAPIError(w, http.StatusBadGateway, "could not start bulk copy")
+			s.apiError(w, r, http.StatusBadGateway, "could not start bulk copy", err)
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "queued": true, "run_id": run.ID, "mailbox": dest.Name})
@@ -1007,7 +1007,7 @@ func (s *Server) apiBulkCopyMessages(w http.ResponseWriter, r *http.Request) {
 	if s.syncRunner != nil {
 		finishForeground, err = s.syncRunner.BeginForegroundOperation(r.Context(), cu.User.ID)
 		if err != nil {
-			writeAPIError(w, http.StatusServiceUnavailable, "could not schedule bulk copy")
+			s.apiError(w, r, http.StatusServiceUnavailable, "could not schedule bulk copy", err)
 			return
 		}
 	}
@@ -1018,7 +1018,7 @@ func (s *Server) apiBulkCopyMessages(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadRequest, "copy source or destination is no longer available")
 			return
 		}
-		writeAPIError(w, http.StatusBadGateway, "could not copy messages")
+		s.apiError(w, r, http.StatusBadGateway, "could not copy messages", err)
 		return
 	}
 	refreshDest()
@@ -1054,7 +1054,7 @@ func (s *Server) apiSetMessageStarred(w http.ResponseWriter, r *http.Request, id
 			http.NotFound(w, r)
 			return
 		}
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	go func(userID, messageID int64) {
@@ -1086,7 +1086,7 @@ func (s *Server) apiOneClickUnsubscribe(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	target, ok := s.oneClickUnsubscribeTarget(r.Context(), cu.User.ID, msg)
@@ -1096,7 +1096,7 @@ func (s *Server) apiOneClickUnsubscribe(w http.ResponseWriter, r *http.Request, 
 	}
 	userDB, err := s.store.UserDB(r.Context(), cu.User.ID)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	hook, ok := oneClickUnsubscribeHook()
@@ -1118,7 +1118,7 @@ func (s *Server) apiOneClickUnsubscribe(w http.ResponseWriter, r *http.Request, 
 	}
 	sentAt := time.Now()
 	if err := hook.RecordOneClickSend(r.Context(), userDB, cu.User.ID, msg.ID, msg.FromAddr, target.String(), sentAt); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "already_sent": false, "sent_at": timeString(sentAt)})
@@ -1142,12 +1142,12 @@ func (s *Server) apiTrustImages(w http.ResponseWriter, r *http.Request, id int64
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	userDB, err := s.store.UserDB(r.Context(), cu.User.ID)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	hook, ok := trustedImageSourcesHook()
@@ -1156,7 +1156,7 @@ func (s *Server) apiTrustImages(w http.ResponseWriter, r *http.Request, id int64
 		return
 	}
 	if err := hook.TrustImageSender(r.Context(), userDB, cu.User.ID, msg.FromAddr); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})

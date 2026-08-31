@@ -67,7 +67,7 @@ func (s *Server) apiPasswordResetComplete(w http.ResponseWriter, r *http.Request
 	}
 	hash, err := auth.HashPassword(in.Password)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	user, err := s.store.UsePasswordResetToken(r.Context(), mmcrypto.TokenHash(strings.TrimSpace(in.Token)), hash)
@@ -76,7 +76,7 @@ func (s *Server) apiPasswordResetComplete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.loginUser(w, r, user.ID); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})

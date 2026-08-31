@@ -39,7 +39,7 @@ func (s *Server) apiNewMailNotifications(w http.ResponseWriter, r *http.Request)
 	if !hasAfter {
 		cursor, err := s.store.LatestNewMailEventID(r.Context(), cu.User.ID)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
@@ -61,7 +61,7 @@ func (s *Server) apiNewMailNotifications(w http.ResponseWriter, r *http.Request)
 	}
 	events, count, cursor, err := s.store.NewMailEventsAfter(r.Context(), cu.User.ID, after, newMailNotificationEnvelopeLimit)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

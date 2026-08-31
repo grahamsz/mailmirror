@@ -38,7 +38,7 @@ func (s *Server) apiSnoozeReminderNotifications(w http.ResponseWriter, r *http.R
 	if rawAfter == "" {
 		cursor, err := s.store.LatestSnoozeReminderEventID(r.Context(), cu.User.ID)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, apiSnoozeReminderNotificationsResponse{
@@ -53,7 +53,7 @@ func (s *Server) apiSnoozeReminderNotifications(w http.ResponseWriter, r *http.R
 	}
 	events, count, cursor, err := s.store.SnoozeReminderEventsAfter(r.Context(), cu.User.ID, after, newMailNotificationEnvelopeLimit)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, apiSnoozeReminderNotificationsResponse{

@@ -83,12 +83,19 @@ func (s *Server) handleRemoteImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cache, err := s.store.GetRemoteImageCacheByHash(r.Context(), cu.User.ID, hash)
-	if store.IsNotFound(err) || cache.Status != store.RemoteImageStatusOK || strings.TrimSpace(cache.BlobPath) == "" {
-		http.NotFound(w, r)
+	if err != nil {
+		// The lookup error has to be classified before the cache fields are
+		// read: on a store failure the zero-valued cache also fails the checks
+		// below, which turned every such failure into a silent 404.
+		if store.IsNotFound(err) {
+			http.NotFound(w, r)
+			return
+		}
+		s.serverError(w, r, err)
 		return
 	}
-	if err != nil {
-		s.serverError(w, err)
+	if cache.Status != store.RemoteImageStatusOK || strings.TrimSpace(cache.BlobPath) == "" {
+		http.NotFound(w, r)
 		return
 	}
 	file, err := s.blobs.OpenUserBlob(cu.User.ID, cache.BlobPath)

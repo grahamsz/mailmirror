@@ -37,11 +37,11 @@ func (s *Server) apiBulkReadMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	owned, err := s.store.OwnedMessageIDsForUser(r.Context(), cu.User.ID, in.IDs)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	if err := s.store.MarkMessagesReadForUser(r.Context(), cu.User.ID, owned, in.Read, true); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	s.notifyUserChanged(cu.User.ID)

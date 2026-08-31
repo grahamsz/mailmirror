@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"rolltop/backend/blob"
+	"rolltop/backend/buildinfo"
 	"rolltop/backend/config"
 	"rolltop/backend/imapclient"
 	"rolltop/backend/plugins"
@@ -38,6 +39,13 @@ import (
 type mailboxWatcher interface {
 	WatchMailbox(ctx context.Context, account store.MailAccount, mailbox string, onChange func()) error
 }
+
+// errRestartForRecovery marks the deliberate exit that hands a stalled search
+// index writer to the restart policy. It is an intended outcome, so crash
+// reporting must not file it as a failure of this run.
+var errRestartForRecovery = errors.New("restarting for offline recovery")
+
+func isPlannedRestart(err error) bool { return errors.Is(err, errRestartForRecovery) }
 
 func main() {
 	var err error
@@ -272,9 +280,18 @@ func shutdownServingApp(app *appRuntime, server *http.Server, serverErr <-chan e
 // run starts the HTTP listener before backend initialization. That lets slow
 // database migrations or index opens show progress in the browser rather than
 // making the app look down.
-func run() error {
+func run() (runErr error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Arm crash reporting before anything can fail. A port conflict or an
+	// unusable configuration is exactly the kind of fatal that crash-loops a
+	// container, and the container log may not survive the next restart.
+	crash := armCrashOutput(config.DataDirFromEnv())
+	// Fallback for failures before the instance lock exists. The lock-scoped
+	// defer below is registered later, so it runs first and makes this one a
+	// no-op on every path that gets that far.
+	defer func() { crash.finish(runErr) }()
 
 	startup := newStartupState()
 	gate := &startupGate{state: startup}
@@ -322,6 +339,11 @@ func run() error {
 		return err
 	}
 	defer lock.Close()
+	// Registered after the lock defer so it runs before the lock is released:
+	// once another process can acquire the lock, this run's state and crash log
+	// are no longer its own to clean up.
+	defer func() { crash.finish(runErr) }()
+	crash.beginRun(buildinfo.Version)
 
 	appCtx, cancelApp := context.WithCancel(ctx)
 	defer cancelApp()
@@ -364,15 +386,18 @@ func run() error {
 
 	if restartUserID > 0 {
 		restartShutdownOwnsClose = true
-		restartErr := fmt.Errorf("search index writer stalled for user %d; restarting for offline recovery", restartUserID)
+		restartErr := fmt.Errorf("search index writer stalled for user %d; %w", restartUserID, errRestartForRecovery)
 		cleanupErr := runSearchWriterRestartShutdown(searchWriterRestartShutdownTimeout, func() error {
 			shutdownErr := shutdownServingApp(app, server, serverErr)
 			app.close()
 			return shutdownErr
 		})
 		if cleanupErr != nil {
+			// Deliberately not wrapping errRestartForRecovery: the restart was
+			// planned, but a cleanup that did not complete is a real failure and
+			// has to be recorded as one.
 			log.Printf("search writer restart cleanup: %v", cleanupErr)
-			return errors.Join(restartErr, cleanupErr)
+			return fmt.Errorf("search index writer stalled for user %d; restart cleanup failed: %w", restartUserID, cleanupErr)
 		}
 		return restartErr
 	}

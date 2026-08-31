@@ -39,9 +39,19 @@ type Config struct {
 	MaxMessageBytes int64
 }
 
+const defaultDataDir = "/data"
+
+// DataDirFromEnv resolves the data directory on its own, without loading or
+// validating the rest of the configuration. Startup paths that must run before
+// Load - crash reporting arms itself before anything can fail - use it to reach
+// the same directory Load will report.
+func DataDirFromEnv() string {
+	return env("ROLLTOP_DATA_DIR", defaultDataDir)
+}
+
 // Load reads environment configuration, applies defaults, and validates values needed before services start.
 func Load() (Config, error) {
-	dataDir := env("ROLLTOP_DATA_DIR", "/data")
+	dataDir := DataDirFromEnv()
 	dbPath := env("ROLLTOP_DB_PATH", filepath.Join(dataDir, "rolltop.db"))
 	indexPath := env("ROLLTOP_INDEX_PATH", filepath.Join(dataDir, "bleve"))
 	pluginDir := env("ROLLTOP_PLUGIN_DIR", "plugins")

@@ -150,7 +150,7 @@ func (s *Server) handleAttachmentPreview(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	hook, ok := attachmentPreviewHook()

@@ -37,7 +37,7 @@ func (s *Server) apiContacts(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		contacts, err := s.store.ListContactsForUser(r.Context(), cu.User.ID, r.URL.Query().Get("q"), 500)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"contacts": apiContactsFromStore(contacts)})
@@ -104,7 +104,7 @@ func (s *Server) apiContact(w http.ResponseWriter, r *http.Request, cu currentUs
 			return
 		}
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"contact": apiContactFromStore(contact)})
@@ -136,7 +136,7 @@ func (s *Server) apiContact(w http.ResponseWriter, r *http.Request, cu currentUs
 				http.NotFound(w, r)
 				return
 			}
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		s.clearComposeIdentityCache(cu.User.ID)
@@ -153,7 +153,7 @@ func (s *Server) apiContactAutocomplete(w http.ResponseWriter, r *http.Request, 
 	}
 	items, err := s.store.AutocompleteContactsForUser(r.Context(), cu.User.ID, r.URL.Query().Get("q"), 12)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	out := make([]apiContactAutocomplete, 0, len(items))
@@ -188,7 +188,7 @@ func (s *Server) apiContactIcon(w http.ResponseWriter, r *http.Request, cu curre
 		defer file.Close()
 		data, err := io.ReadAll(io.LimitReader(file, maxContactIconBytes+1))
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		if len(data) == 0 || len(data) > maxContactIconBytes {
@@ -202,7 +202,7 @@ func (s *Server) apiContactIcon(w http.ResponseWriter, r *http.Request, cu curre
 		}
 		saved, err := s.blobs.SaveContactIcon(cu.User.ID, contactID, header.Filename, data)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		blob, err := s.store.CreateBlob(r.Context(), store.BlobRecord{
@@ -213,7 +213,7 @@ func (s *Server) apiContactIcon(w http.ResponseWriter, r *http.Request, cu curre
 			Size:   saved.Size,
 		})
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		if _, err := s.store.SetContactIcon(r.Context(), cu.User.ID, contactID, blob.ID, contentType, header.Filename, saved.Size); err != nil {
@@ -221,14 +221,14 @@ func (s *Server) apiContactIcon(w http.ResponseWriter, r *http.Request, cu curre
 				http.NotFound(w, r)
 				return
 			}
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		s.clearSenderContactIconCache(cu.User.ID)
 		s.clearComposeIdentityCache(cu.User.ID)
 		contact, err := s.store.GetContactForUser(r.Context(), cu.User.ID, contactID)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"contact": apiContactFromStore(contact)})
@@ -241,14 +241,14 @@ func (s *Server) apiContactIcon(w http.ResponseWriter, r *http.Request, cu curre
 				http.NotFound(w, r)
 				return
 			}
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		s.clearSenderContactIconCache(cu.User.ID)
 		s.clearComposeIdentityCache(cu.User.ID)
 		contact, err := s.store.GetContactForUser(r.Context(), cu.User.ID, contactID)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"contact": apiContactFromStore(contact)})
@@ -315,7 +315,7 @@ func (s *Server) apiAddSenderContact(w http.ResponseWriter, r *http.Request, mes
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	contact, created, err := s.addSenderContact(r.Context(), cu.User.ID, msg.FromAddr)
@@ -388,7 +388,7 @@ func (s *Server) apiImportContacts(w http.ResponseWriter, r *http.Request, cu cu
 		}
 		existing, ok, err := s.findImportMergeTarget(r.Context(), cu.User.ID, contact)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		if ok {
@@ -419,7 +419,7 @@ func (s *Server) apiExportContacts(w http.ResponseWriter, r *http.Request, cu cu
 	}
 	contacts, err := s.store.ListContactsForUser(r.Context(), cu.User.ID, "", 10000)
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	data := writeVCards(contacts)

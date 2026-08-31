@@ -3,6 +3,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -54,7 +55,13 @@ func (s *Server) apiPushSubscription(w http.ResponseWriter, r *http.Request) {
 			UserAgent: r.UserAgent(),
 		})
 		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid web push subscription")
+			// A rejected endpoint is the caller's fault, but a store failure is
+			// not: answering both with 400 hid outages behind a client error.
+			if errors.Is(err, store.ErrInvalidWebPushSubscription) {
+				writeAPIError(w, http.StatusBadRequest, "invalid web push subscription")
+				return
+			}
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "subscription_id": sub.ID})
@@ -69,7 +76,7 @@ func (s *Server) apiPushSubscription(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.DeleteWebPushSubscription(r.Context(), cu.User.ID, in.Endpoint); err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "failed to delete web push subscription")
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]bool{"ok": true})

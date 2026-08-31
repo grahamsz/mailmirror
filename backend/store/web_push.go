@@ -40,19 +40,24 @@ var nonPublicWebPushPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("fec0::/10"),
 }
 
+// ErrInvalidWebPushSubscription marks a subscription the browser sent wrong, as
+// opposed to a storage failure. HTTP callers answer the first with 400 and the
+// second with 500, so the two must stay distinguishable.
+var ErrInvalidWebPushSubscription = errors.New("invalid web push subscription")
+
 // SaveWebPushSubscription upserts one Push API endpoint for the signed-in user.
 func (s *Store) SaveWebPushSubscription(ctx context.Context, userID int64, sub WebPushSubscription) (WebPushSubscription, error) {
 	endpoint := strings.TrimSpace(sub.Endpoint)
 	p256dh := strings.TrimSpace(sub.P256DH)
 	auth := strings.TrimSpace(sub.Auth)
 	if userID <= 0 || endpoint == "" || p256dh == "" || auth == "" {
-		return WebPushSubscription{}, errors.New("web push subscription fields are incomplete")
+		return WebPushSubscription{}, fmt.Errorf("%w: fields are incomplete", ErrInvalidWebPushSubscription)
 	}
 	if err := validateWebPushEndpoint(endpoint); err != nil {
-		return WebPushSubscription{}, err
+		return WebPushSubscription{}, fmt.Errorf("%w: %w", ErrInvalidWebPushSubscription, err)
 	}
 	if err := validateWebPushKeyMaterial(p256dh, auth); err != nil {
-		return WebPushSubscription{}, err
+		return WebPushSubscription{}, fmt.Errorf("%w: %w", ErrInvalidWebPushSubscription, err)
 	}
 	userAgent := trimLimit(strings.TrimSpace(sub.UserAgent), 500)
 	ts := nowUnix()

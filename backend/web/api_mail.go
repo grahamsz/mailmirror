@@ -49,7 +49,7 @@ func (s *Server) apiMail(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	writeMailTimingHeaders(w, timing, page)
@@ -124,7 +124,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	searchQuery, mailboxFilter, err := s.searchMailboxFilter(r.Context(), cu.User.ID, q)
 	filterDone()
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	if searchQuery != "" && strings.Contains(strings.ToLower(searchQuery), "lang:") && !s.pluginEnabled(r.Context(), plugins.LanguageSearch) {
@@ -133,7 +133,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(searchQuery) != "" {
 		if _, err := s.ensureRecentSearchDocuments(r.Context(), cu.User.ID); err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 	}
@@ -159,7 +159,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 		seeds, err = s.searchConversationSeedHits(r.Context(), cu.User.ID, searchQuery, page, pageSize, opts, own, mailboxFilter, timing)
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	timing.seeds = len(seeds)
@@ -167,7 +167,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	conversations, err := s.conversationViewsWithSearchDetails(r.Context(), cu.User.ID, seeds, own, searchQuery)
 	renderDone()
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	hasNext := len(conversations) > pageSize

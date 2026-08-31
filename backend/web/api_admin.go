@@ -26,7 +26,7 @@ func (s *Server) apiAdminUsers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		users, err := s.store.ListUsers(r.Context())
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		out := make([]apiUser, 0, len(users))
@@ -53,7 +53,7 @@ func (s *Server) apiAdminUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		hash, err := auth.HashPassword(in.Password)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		_, err = s.store.CreateUser(r.Context(), in.Email, in.Name, hash, in.IsAdmin)
@@ -103,7 +103,7 @@ func (s *Server) apiAdminUserPath(w http.ResponseWriter, r *http.Request, rest s
 		}
 		hash, err := auth.HashPassword(in.Password)
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		if err := s.store.UpdateUserPasswordHash(r.Context(), id, hash); err != nil {
@@ -111,7 +111,7 @@ func (s *Server) apiAdminUserPath(w http.ResponseWriter, r *http.Request, rest s
 				http.NotFound(w, r)
 				return
 			}
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		_ = cu
@@ -131,7 +131,7 @@ func (s *Server) apiAdminUserPath(w http.ResponseWriter, r *http.Request, rest s
 				http.NotFound(w, r)
 				return
 			}
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true})
@@ -168,7 +168,7 @@ func (s *Server) apiAdminPasswordResetSettings(w http.ResponseWriter, r *http.Re
 			from = strings.ToLower(strings.TrimSpace(addr.Address))
 		}
 		if err := s.store.SetSystemSetting(r.Context(), passwordResetFromAddressSetting, from); err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "from_address": s.adminPasswordResetFromAddress(r.Context(), cu.User.Email)})
@@ -195,7 +195,7 @@ func (s *Server) apiAdminPlugins(w http.ResponseWriter, r *http.Request) {
 	}
 	settings, err := s.store.ListPluginSettings(r.Context())
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"plugins": s.apiAdminPluginSettings(settings)})
@@ -224,12 +224,12 @@ func (s *Server) apiAdminPlugin(w http.ResponseWriter, r *http.Request, rest str
 		return
 	}
 	if err := s.store.SyncPluginDefinitions(r.Context(), plugins.DefinitionsFromManifests(s.pluginManifests)); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	users, err := s.store.ListUsers(r.Context())
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	if err := s.store.SetPluginEnabled(r.Context(), pluginID, in.Enabled); err != nil {
@@ -237,7 +237,7 @@ func (s *Server) apiAdminPlugin(w http.ResponseWriter, r *http.Request, rest str
 			http.NotFound(w, r)
 			return
 		}
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	defer s.notifyPluginSettingChanged(users)
@@ -247,12 +247,12 @@ func (s *Server) apiAdminPlugin(w http.ResponseWriter, r *http.Request, rest str
 			log.Printf("backend plugin %s enabled but unavailable: %v", pluginID, err)
 		}
 	} else if err := s.stopBackendPlugin(pluginID); err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	settings, err := s.store.ListPluginSettings(r.Context())
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "plugins": s.apiAdminPluginSettings(settings)})
@@ -289,7 +289,7 @@ func (s *Server) apiAdminRemoteImageBlocklist(w http.ResponseWriter, r *http.Req
 		}
 		rules, err := hook.ListRemoteImageRules(r.Context(), s.store.DB())
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		patterns := make([]string, 0, len(rules))
@@ -325,7 +325,7 @@ func (s *Server) apiAdminRemoteImageBlocklist(w http.ResponseWriter, r *http.Req
 			return
 		}
 		if err := hook.ReplaceRemoteImageRules(r.Context(), s.store.DB(), patterns); err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "patterns": patterns})

@@ -14,7 +14,7 @@ func (s *Server) apiPlugins(w http.ResponseWriter, r *http.Request) {
 	}
 	settings, err := s.store.ListPluginSettings(r.Context())
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	enabled := make([]string, 0, len(settings))

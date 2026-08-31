@@ -145,7 +145,7 @@ func (s *Server) apiSyncRun(w http.ResponseWriter, r *http.Request, rest string)
 		return
 	}
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "cancel" {
@@ -162,7 +162,7 @@ func (s *Server) apiSyncRun(w http.ResponseWriter, r *http.Request, rest string)
 		}
 		active := s.syncRunner != nil && s.syncRunner.CancelSyncRun(cu.User.ID, id)
 		if err := s.store.InterruptSyncRunForUser(r.Context(), cu.User.ID, id, "Cancelled by user."); err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		s.events.Notify(cu.User.ID)

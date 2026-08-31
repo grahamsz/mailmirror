@@ -49,7 +49,7 @@ func (s *Server) apiMessageSnooze(w http.ResponseWriter, r *http.Request, messag
 			return
 		}
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{
@@ -78,7 +78,7 @@ func (s *Server) apiMessageSnooze(w http.ResponseWriter, r *http.Request, messag
 			return
 		}
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		s.notifySnoozeStateChanged(cu.User.ID)
@@ -93,7 +93,7 @@ func (s *Server) apiMessageSnooze(w http.ResponseWriter, r *http.Request, messag
 			return
 		}
 		if err != nil {
-			s.serverError(w, err)
+			s.serverError(w, r, err)
 			return
 		}
 		if removed {
@@ -118,7 +118,7 @@ func (s *Server) apiSnoozes(w http.ResponseWriter, r *http.Request) {
 	page := pageFromRequest(r)
 	items, err := s.store.ListActiveSnoozedMessagesForUser(r.Context(), cu.User.ID, pageSize+1, (page-1)*pageSize, time.Now().UTC())
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	hasNext := len(items) > pageSize
@@ -133,7 +133,7 @@ func (s *Server) apiSnoozes(w http.ResponseWriter, r *http.Request) {
 	}
 	conversations, err := s.conversationViews(r.Context(), cu.User.ID, messages, s.ownAddresses(r.Context(), cu.User))
 	if err != nil {
-		s.serverError(w, err)
+		s.serverError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")

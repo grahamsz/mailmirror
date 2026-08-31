@@ -480,6 +480,7 @@ export function ComposeBox({
   function applyRecoveredContent(recovery: LocalComposeRecovery, baseForm = form) {
     setForm({
       ...baseForm,
+      submission_key: recovery.submissionKey || baseForm.submission_key,
       to: recovery.to,
       cc: recovery.cc,
       bcc: recovery.bcc,
@@ -710,11 +711,14 @@ export function ComposeBox({
     const uploadAttachments = attachments.filter((attachment) => !attachment.inline || preparedHTML.inlineIDs.has(attachment.id));
     const nextForm: ComposeForm = {
       ...form,
+      submission_key: form.submission_key || newSubmissionKey(),
       from_identity_id: form.from_identity_id || primaryIdentity?.id || 0,
       body: editor?.innerText || "",
       body_html: preparedHTML.html,
       attach_public_key: composeSecurity.attachPublicKey
     };
+    setForm(nextForm);
+    saveComposeRecovery(userID, localComposeContext, currentLocalComposeContent(nextForm, editor));
     let sent = false;
     let prepared: { form: ComposeForm; attachments: ComposeAttachmentUpload[] } | null = null;
     setSending(true);
@@ -730,7 +734,7 @@ export function ComposeBox({
       await api.send(csrf, prepared.form, prepared.attachments);
       sent = true;
       clearLocalComposeRecovery();
-      addToast("Message sent.");
+      addToast("Message queued. It is already visible in Sent.");
       onSent();
     } catch (err) {
       // No connectivity: queue the exact prepared payload and deliver it on
@@ -1167,6 +1171,7 @@ function explicitServerComposeContext(context: string, initial: ComposeForm): bo
 function localComposeContent(form: ComposeForm, html: string): LocalComposeContent {
   const safeHTML = recoverableEditorHTML(html);
   return {
+    submissionKey: form.submission_key || "",
     to: form.to.trim(),
     cc: form.cc.trim(),
     bcc: form.bcc.trim(),
@@ -1183,6 +1188,7 @@ function currentLocalComposeContent(form: ComposeForm, editor: HTMLDivElement | 
 
 function recoveryContent(recovery: LocalComposeRecovery): LocalComposeContent {
   return {
+    submissionKey: recovery.submissionKey,
     to: recovery.to,
     cc: recovery.cc,
     bcc: recovery.bcc,
@@ -1191,6 +1197,18 @@ function recoveryContent(recovery: LocalComposeRecovery): LocalComposeContent {
     bodyHTML: recoverableEditorHTML(recovery.bodyHTML || textToHTML(recovery.body)),
     fromIdentityID: recovery.fromIdentityID
   };
+}
+
+function newSubmissionKey(): string {
+  if (typeof globalThis.crypto !== "undefined" && typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  if (typeof globalThis.crypto !== "undefined" && typeof globalThis.crypto.getRandomValues === "function") {
+    const random = new Uint32Array(4);
+    globalThis.crypto.getRandomValues(random);
+    return Array.from(random, (value) => value.toString(16).padStart(8, "0")).join("");
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function recoverableEditorHTML(html: string): string {

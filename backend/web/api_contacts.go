@@ -92,6 +92,10 @@ func (s *Server) apiContactPath(w http.ResponseWriter, r *http.Request, rest str
 		s.apiContactIcon(w, r, cu, id)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "interactions" {
+		s.apiContactInteractions(w, r, cu, id)
+		return
+	}
 	http.NotFound(w, r)
 }
 
@@ -167,6 +171,34 @@ func (s *Server) apiContactAutocomplete(w http.ResponseWriter, r *http.Request, 
 		})
 	}
 	writeJSON(w, map[string]any{"contacts": out})
+}
+
+func (s *Server) apiContactInteractions(w http.ResponseWriter, r *http.Request, cu currentUser, contactID int64) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	items, err := s.store.ListContactInteractionsForUser(r.Context(), cu.User.ID, contactID, 6)
+	if store.IsNotFound(err) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	out := make([]apiContactInteraction, 0, len(items))
+	for _, item := range items {
+		out = append(out, apiContactInteraction{
+			MessageID:      item.MessageID,
+			Subject:        item.Subject,
+			FromAddr:       item.FromAddr,
+			Date:           timeString(item.Date),
+			Direction:      item.Direction,
+			HasAttachments: item.HasAttachments,
+		})
+	}
+	writeJSON(w, map[string]any{"interactions": out})
 }
 
 func (s *Server) apiContactIcon(w http.ResponseWriter, r *http.Request, cu currentUser, contactID int64) {

@@ -278,6 +278,9 @@ func TestClipHTMLQuoteDoesNotRemoveLeadingBlockquoteFormatting(t *testing.T) {
 
 func TestEmailDocumentRendersPlainTextAsProportionalWrappedText(t *testing.T) {
 	doc := emailDocument("", "Hello\n\nThis should wrap like mail.", false)
+	if !strings.Contains(doc, `<meta name="viewport" content="width=device-width, initial-scale=1">`) {
+		t.Fatalf("missing mobile viewport: %s", doc)
+	}
 	if strings.Contains(doc, "<pre>") {
 		t.Fatalf("plain text rendered as pre: %s", doc)
 	}

@@ -7,7 +7,9 @@ import (
 	"database/sql"
 	"net/mail"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type contactAutocompleteCandidate struct {
@@ -15,6 +17,18 @@ type contactAutocompleteCandidate struct {
 	saved     bool
 	frequency int
 	recency   int
+}
+
+// ContactInteraction is one recent, user-owned message exchanged with a saved
+// contact. It intentionally contains only the compact fields needed by the
+// contact profile rather than hydrating message bodies.
+type ContactInteraction struct {
+	MessageID      int64
+	Subject        string
+	FromAddr       string
+	Date           time.Time
+	Direction      string
+	HasAttachments bool
 }
 
 // NormalizeContactEmail canonicalizes email addresses for contact matching and Me identity lookup.
@@ -261,6 +275,115 @@ func (s *Store) ListContactsForUser(ctx context.Context, userID int64, query str
 		}
 	}
 	return contacts, nil
+}
+
+// ListContactInteractionsForUser returns the newest distinct conversations
+// involving any email saved on the contact. The contact lookup and message
+// query are both scoped to userID; browser callers never choose that value.
+func (s *Store) ListContactInteractionsForUser(ctx context.Context, userID, contactID int64, limit int) ([]ContactInteraction, error) {
+	if limit <= 0 || limit > 20 {
+		limit = 6
+	}
+	contact, err := s.GetContactForUser(ctx, userID, contactID)
+	if err != nil {
+		return nil, err
+	}
+	targets := map[string]struct{}{}
+	for _, item := range contact.Emails {
+		if email := NormalizeContactEmail(item.Email); email != "" {
+			targets[email] = struct{}{}
+		}
+	}
+	if len(targets) == 0 {
+		return []ContactInteraction{}, nil
+	}
+
+	// Walk the existing user/date index newest-first. The SQL substring test
+	// narrows candidates cheaply; parsed addresses below provide exact matching.
+	predicates := make([]string, 0, len(targets)*3)
+	args := make([]any, 0, 2+len(targets)*3)
+	args = append(args, userID)
+	for email := range targets {
+		for _, column := range []string{"from_addr", "to_addr", "cc_addr"} {
+			predicates = append(predicates, "instr(lower("+column+"), ?) > 0")
+			args = append(args, email)
+		}
+	}
+	candidateLimit := limit * 12
+	if candidateLimit < 48 {
+		candidateLimit = 48
+	}
+	args = append(args, candidateLimit)
+	rows, err := s.mustDataDB(ctx, userID).QueryContext(ctx, `SELECT
+			id, message_id_header, thread_key, subject, from_addr, to_addr, cc_addr,
+			date_unix, has_attachments
+		FROM messages
+		WHERE user_id = ? AND (`+strings.Join(predicates, " OR ")+`)
+		ORDER BY date_unix DESC, id DESC
+		LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	seenConversations := map[string]struct{}{}
+	out := make([]ContactInteraction, 0, limit)
+	for rows.Next() {
+		var (
+			messageID, dateUnix int64
+			messageIDHeader     string
+			threadKey           string
+			subject             string
+			fromAddr            string
+			toAddr              string
+			ccAddr              string
+			hasAttachments      bool
+		)
+		if err := rows.Scan(&messageID, &messageIDHeader, &threadKey, &subject, &fromAddr, &toAddr, &ccAddr, &dateUnix, &hasAttachments); err != nil {
+			return nil, err
+		}
+		fromContact := contactAddressFieldMatches(fromAddr, targets)
+		toContact := contactAddressFieldMatches(toAddr, targets) || contactAddressFieldMatches(ccAddr, targets)
+		if !fromContact && !toContact {
+			continue
+		}
+		conversationKey := strings.TrimSpace(threadKey)
+		if conversationKey == "" {
+			conversationKey = strings.TrimSpace(messageIDHeader)
+		}
+		if conversationKey == "" {
+			conversationKey = "id:" + strconv.FormatInt(messageID, 10)
+		}
+		if _, seen := seenConversations[conversationKey]; seen {
+			continue
+		}
+		seenConversations[conversationKey] = struct{}{}
+		direction := "sent"
+		if fromContact {
+			direction = "received"
+		}
+		out = append(out, ContactInteraction{
+			MessageID:      messageID,
+			Subject:        subject,
+			FromAddr:       fromAddr,
+			Date:           unixTime(dateUnix),
+			Direction:      direction,
+			HasAttachments: hasAttachments,
+		})
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, rows.Err()
+}
+
+func contactAddressFieldMatches(value string, targets map[string]struct{}) bool {
+	for _, address := range autocompleteAddresses(value) {
+		if _, ok := targets[NormalizeContactEmail(address.Address)]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // AutocompleteContactsForUser merges saved contacts with recent user-owned

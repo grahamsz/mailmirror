@@ -1763,6 +1763,16 @@ export function ThreadView({
             const annotationNodes = messageAnnotationNodes(messageSecurityPlugins, item);
             return (
               <article className={`thread-card ${isExpanded ? "" : "collapsed"}`} key={item.message.id}>
+                {item.message.outbox_id ? (
+                  <button className={`thread-outbox-banner ${outboxTone(item.message.delivery_state, item.message.filing_state)}`} type="button" onClick={() => navigate("/outbox")}>
+                    <Icon name={item.message.needs_attention ? "report" : "send"} />
+                    <span>
+                      <strong>{outboxTitle(item.message.delivery_state, item.message.filing_state)}</strong>
+                      <small>{outboxDetail(item.message.delivery_state, item.message.filing_state, item.message.delivery_error)}</small>
+                    </span>
+                    <span>View Outbox</span>
+                  </button>
+                ) : null}
                 <div
                   className="thread-summary"
                   role="button"
@@ -2086,6 +2096,30 @@ export function ThreadView({
       ) : null}
     </>
   );
+}
+
+function outboxTitle(delivery = "", filing = ""): string {
+  if (delivery === "delivery_unknown") return "Delivery could not be confirmed";
+  if (delivery === "failed") return "This message has not been sent";
+  if (delivery === "accepted" && filing === "complete") return "Sent";
+  if (delivery === "accepted") return filing === "needs_attention" ? "Sent, but its server copy needs attention" : "Sent; confirming its server copy";
+  if (delivery === "retry_wait") return "Waiting to retry";
+  if (delivery === "smtp_in_flight") return "Sending now";
+  return "Queued to send";
+}
+
+function outboxDetail(delivery = "", filing = "", error = ""): string {
+  if (error) return error;
+  if (delivery === "accepted" && filing === "complete") return "SMTP delivery and the Sent-folder copy are both confirmed.";
+  if (delivery === "accepted") return "SMTP accepted this message. Rolltop will not send it again while it finishes the Sent-folder copy.";
+  return "This local Sent entry is available immediately while delivery continues in the background.";
+}
+
+function outboxTone(delivery = "", filing = ""): string {
+  if (delivery === "delivery_unknown" || delivery === "failed") return "danger";
+  if (delivery === "retry_wait" || filing === "needs_attention") return "warning";
+  if (delivery === "accepted" && filing === "complete") return "complete";
+  return "active";
 }
 
 

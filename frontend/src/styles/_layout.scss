@@ -549,6 +549,19 @@
   font-size: 12px;
 }
 
+.folder.outbox-attention {
+  color: var(--danger);
+}
+
+.outbox-attention-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: white !important;
+  font-weight: 800;
+}
+
 .folder-tree,
 .folder-children {
   display: grid;

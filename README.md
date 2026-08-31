@@ -7,6 +7,7 @@ rolltop is a single-container Go app that mirrors multiple IMAP inboxes per loca
 - SQLite metadata at `/data/rolltop.db`
 - Per-user Bleve search indexes at `/data/users/{user_id}/bleve`
 - Raw `.eml` and attachment blobs under `/data/users/{user_id}/blobs/...`
+- Immutable queued-send `.eml` files under each user's blob directory until SMTP delivery and Sent filing finish
 - Incremental sync progress in `sync_runs`
 - A compiled React + Vite + TypeScript frontend served by the Go process
 
@@ -20,7 +21,7 @@ rolltop is a single-container Go app that mirrors multiple IMAP inboxes per loca
 - App passwords are hashed with Argon2id.
 - IMAP passwords are encrypted at rest with `ROLLTOP_MASTER_KEY`.
 - Admins can create users, but V1 does not give admins access to other users' mail.
-- Message sending uses the configured SMTP server.
+- Message sending is durably queued, appears in Sent immediately, and is dispatched asynchronously through the configured SMTP server.
 - Mailbox moves are explicit user actions and are mirrored to IMAP.
 - Read-state sync may update only the IMAP `\Seen` flag when a message is read locally.
 - Message authentication badges report bounded SPF, DKIM, and DMARC values found in received headers; Rolltop labels their source and does not claim to verify them independently.

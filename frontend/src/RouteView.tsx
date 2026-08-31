@@ -2,11 +2,12 @@
 // into feature views while passing only the shared state each view needs.
 
 import type { AddToast, LocationState, SecurityUnlockState } from "./appTypes";
-import type { Bootstrap, Mailbox, SwipePreferences, SyncRun, ThemeDefinition, User } from "./types";
+import type { Bootstrap, Mailbox, OutboxSummary, SwipePreferences, SyncRun, ThemeDefinition, User } from "./types";
 import { MailView, SearchView, SnoozedView } from "./features/mail/MailViews";
 import { ThreadView } from "./features/mail/ThreadView";
 import { ComposePage } from "./features/compose/ComposeViews";
 import { ContactsView } from "./features/contacts/ContactsView";
+import { OutboxView } from "./features/outbox/OutboxView";
 import { SettingsView, AdminUsersView, SyncRunView } from "./features/settings/SettingsViews";
 import type { RuntimePlugins } from "./plugins/runtime";
 import { securityUnlockPlugin } from "./plugins/securityUnlock";
@@ -23,6 +24,7 @@ export function RouteView({
   latestSyncRun,
   activeSyncRuns,
   syncRunning,
+  outbox,
   mailGeneration,
   swipePreferences,
   enabledPlugins,
@@ -44,6 +46,7 @@ export function RouteView({
   latestSyncRun: SyncRun | null;
   activeSyncRuns: SyncRun[];
   syncRunning: boolean;
+  outbox: OutboxSummary;
   mailGeneration: number;
   swipePreferences: SwipePreferences;
   enabledPlugins: string[];
@@ -88,8 +91,11 @@ export function RouteView({
   if (location.path === "/compose") {
     return <ComposePage userID={user.id} csrf={csrf} location={location} navigate={navigate} securityEnabled={securityEnabled} securityPlugins={runtimePlugins.all} securityUnlock={securityUnlock} openSecurityUnlock={openSecurityUnlock} addToast={addToast} />;
   }
+  if (location.path === "/outbox") {
+    return <OutboxView csrf={csrf} summary={outbox} navigate={navigate} addToast={addToast} />;
+  }
   if (location.path === "/contacts") {
-    return <ContactsView csrf={csrf} contactPlugins={runtimePlugins.all} addToast={addToast} />;
+    return <ContactsView csrf={csrf} contactPlugins={runtimePlugins.all} navigate={navigate} openCompose={openCompose} addToast={addToast} />;
   }
   if (location.path === "/settings/account" || location.path.startsWith("/settings/account/")) {
     return <SettingsView key={user.id} csrf={csrf} user={user} mailboxes={mailboxes} swipePreferences={swipePreferences} latestSyncRun={latestSyncRun} activeSyncRuns={activeSyncRuns} syncRunning={syncRunning} availableThemes={availableThemes} location={location} navigate={navigate} refreshChrome={refreshChrome} runtimePlugins={runtimePlugins} reloadRuntimePlugins={reloadRuntimePlugins} addToast={addToast} />;

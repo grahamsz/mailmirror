@@ -135,7 +135,9 @@ func (s *Store) UpdateMailboxStarFlags(ctx context.Context, userID, accountID, m
 	for _, uid := range flaggedUIDs {
 		flagged[uid] = true
 	}
-	rows, err := s.mustDataDB(ctx, userID).QueryContext(ctx, `SELECT id, uid, is_starred FROM messages WHERE user_id = ? AND account_id = ? AND mailbox_id = ? AND star_sync_pending = 0`,
+	rows, err := s.mustDataDB(ctx, userID).QueryContext(ctx, `SELECT id, uid, is_starred FROM messages
+		WHERE user_id = ? AND account_id = ? AND mailbox_id = ?
+			AND star_sync_pending = 0 AND outbox_job_id = 0`,
 		userID, accountID, mailboxID)
 	if err != nil {
 		return nil, err
@@ -174,7 +176,8 @@ func (s *Store) UpdateMailboxStarFlags(ctx context.Context, userID, accountID, m
 	changed := make([]int64, 0, len(updates))
 	for _, update := range updates {
 		if _, err := tx.ExecContext(ctx, `UPDATE messages SET is_starred = ?, updated_at = ?
-			WHERE user_id = ? AND account_id = ? AND mailbox_id = ? AND uid = ? AND star_sync_pending = 0`,
+			WHERE user_id = ? AND account_id = ? AND mailbox_id = ? AND uid = ?
+				AND star_sync_pending = 0 AND outbox_job_id = 0`,
 			boolInt(update.IsStarred), now, userID, accountID, mailboxID, update.UID); err != nil {
 			return nil, err
 		}
@@ -192,7 +195,9 @@ func (s *Store) UpdateMailboxReadFlags(ctx context.Context, userID, accountID, m
 	for _, uid := range seenUIDs {
 		seen[uid] = true
 	}
-	rows, err := s.mustDataDB(ctx, userID).QueryContext(ctx, `SELECT id, uid, is_read FROM messages WHERE user_id = ? AND account_id = ? AND mailbox_id = ? AND read_sync_pending = 0`,
+	rows, err := s.mustDataDB(ctx, userID).QueryContext(ctx, `SELECT id, uid, is_read FROM messages
+		WHERE user_id = ? AND account_id = ? AND mailbox_id = ?
+			AND read_sync_pending = 0 AND outbox_job_id = 0`,
 		userID, accountID, mailboxID)
 	if err != nil {
 		return nil, err
@@ -231,7 +236,8 @@ func (s *Store) UpdateMailboxReadFlags(ctx context.Context, userID, accountID, m
 	changed := make([]int64, 0, len(updates))
 	for _, update := range updates {
 		if _, err := tx.ExecContext(ctx, `UPDATE messages SET is_read = ?, updated_at = ?
-			WHERE user_id = ? AND account_id = ? AND mailbox_id = ? AND uid = ? AND read_sync_pending = 0`,
+			WHERE user_id = ? AND account_id = ? AND mailbox_id = ? AND uid = ?
+				AND read_sync_pending = 0 AND outbox_job_id = 0`,
 			boolInt(update.IsRead), now, userID, accountID, mailboxID, update.UID); err != nil {
 			return nil, err
 		}

@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -70,6 +71,47 @@ type Sender struct {
 	Timeout   time.Duration
 }
 
+// DeliveryPhase identifies the SMTP boundary that failed without exposing
+// envelope addresses or message content.
+type DeliveryPhase string
+
+const (
+	DeliveryPhaseConnect      DeliveryPhase = "connect"
+	DeliveryPhaseTLS          DeliveryPhase = "tls"
+	DeliveryPhaseHello        DeliveryPhase = "hello"
+	DeliveryPhaseAuthenticate DeliveryPhase = "authenticate"
+	DeliveryPhaseEnvelope     DeliveryPhase = "envelope"
+	DeliveryPhaseData         DeliveryPhase = "data"
+	DeliveryPhaseTransmit     DeliveryPhase = "transmit"
+	DeliveryPhaseAccept       DeliveryPhase = "accept"
+)
+
+// DeliveryOutcome describes whether retrying SMTP is safe.
+type DeliveryOutcome string
+
+const (
+	DeliveryNotAccepted DeliveryOutcome = "not_accepted"
+	DeliveryAccepted    DeliveryOutcome = "accepted"
+	DeliveryUnknown     DeliveryOutcome = "unknown"
+)
+
+// DeliveryError preserves retry and ambiguity information that ordinary
+// wrapped SMTP errors lose.
+type DeliveryError struct {
+	Phase     DeliveryPhase
+	Temporary bool
+	Outcome   DeliveryOutcome
+	Err       error
+}
+
+func (e *DeliveryError) Error() string {
+	return fmt.Sprintf("SMTP %s: %v", e.Phase, e.Err)
+}
+
+func (e *DeliveryError) Unwrap() error {
+	return e.Err
+}
+
 type smtpIdleDeadlineConn struct {
 	net.Conn
 	timeout time.Duration
@@ -107,15 +149,22 @@ func (s *Sender) Send(ctx context.Context, account store.MailAccount, msg Messag
 
 // SendRaw sends an already-built RFC822 payload to all recipients using the configured SMTP account.
 func (s *Sender) SendRaw(ctx context.Context, account store.MailAccount, recipients []string, raw []byte) error {
+	return s.SendRawReader(ctx, account, recipients, bytes.NewReader(raw))
+}
+
+// SendRawReader streams an immutable RFC822 payload without retaining another
+// full copy in memory. Callers must open a fresh reader for every attempt.
+func (s *Sender) SendRawReader(ctx context.Context, account store.MailAccount, recipients []string, raw io.Reader) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if len(recipients) == 0 {
+	if len(recipients) == 0 || raw == nil {
 		return errors.New("message has no recipients")
 	}
 	password, err := mmcrypto.DecryptString(s.MasterKey, account.EncryptedSMTPPassword)
 	if err != nil {
-		return fmt.Errorf("decrypt SMTP password: %w", err)
+		return deliveryError(DeliveryPhaseAuthenticate, DeliveryNotAccepted, false,
+			fmt.Errorf("decrypt SMTP password: %w", err))
 	}
 	timeout := s.Timeout
 	if timeout == 0 {
@@ -125,7 +174,8 @@ func (s *Sender) SendRaw(ctx context.Context, account store.MailAccount, recipie
 	dialer := &net.Dialer{Timeout: timeout}
 	rawConn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return fmt.Errorf("connect to SMTP server %s: %w", addr, err)
+		return deliveryError(DeliveryPhaseConnect, DeliveryNotAccepted, true,
+			fmt.Errorf("connect to SMTP server %s: %w", addr, err))
 	}
 	deadlineConn := &smtpIdleDeadlineConn{Conn: rawConn, timeout: timeout}
 	var conn net.Conn = deadlineConn
@@ -135,68 +185,111 @@ func (s *Sender) SendRaw(ctx context.Context, account store.MailAccount, recipie
 		tlsConn := tls.Client(deadlineConn, &tls.Config{ServerName: account.SMTPHost, MinVersion: tls.VersionTLS12})
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = tlsConn.Close()
-			return fmt.Errorf("start SMTP TLS: %w", err)
+			return deliveryError(DeliveryPhaseTLS, DeliveryNotAccepted, smtpErrorTemporary(err),
+				fmt.Errorf("start SMTP TLS: %w", err))
 		}
 		conn = tlsConn
 	}
-	return sendRawOnConn(ctx, account, password, recipients, raw, conn)
+	return sendRawReaderOnConn(ctx, account, password, recipients, raw, conn)
 }
 
 func sendRawOnConn(ctx context.Context, account store.MailAccount, password string, recipients []string, raw []byte, conn net.Conn) error {
+	return sendRawReaderOnConn(ctx, account, password, recipients, bytes.NewReader(raw), conn)
+}
+
+func sendRawReaderOnConn(ctx context.Context, account store.MailAccount, password string, recipients []string, raw io.Reader, conn net.Conn) error {
 	defer conn.Close()
 	stopContext := watchSMTPContext(ctx, conn)
 	defer stopContext()
 
 	c, err := smtp.NewClient(conn, account.SMTPHost)
 	if err != nil {
-		return fmt.Errorf("initialize SMTP client for %s: %w", account.SMTPHost, err)
+		return deliveryError(DeliveryPhaseConnect, DeliveryNotAccepted, true,
+			fmt.Errorf("initialize SMTP client for %s: %w", account.SMTPHost, err))
 	}
 	defer c.Close()
 	if err := c.Hello("localhost"); err != nil {
-		return fmt.Errorf("SMTP hello: %w", err)
+		return deliveryError(DeliveryPhaseHello, DeliveryNotAccepted, smtpErrorTemporary(err),
+			fmt.Errorf("SMTP hello: %w", err))
 	}
 	if account.SMTPUseTLS && account.SMTPPort != 465 {
 		if ok, _ := c.Extension("STARTTLS"); ok {
 			if err := c.StartTLS(&tls.Config{ServerName: account.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
-				return fmt.Errorf("start SMTP TLS: %w", err)
+				return deliveryError(DeliveryPhaseTLS, DeliveryNotAccepted, smtpErrorTemporary(err),
+					fmt.Errorf("start SMTP TLS: %w", err))
 			}
 		} else {
-			return errors.New("SMTP server does not advertise STARTTLS")
+			return deliveryError(DeliveryPhaseTLS, DeliveryNotAccepted, false,
+				errors.New("SMTP server does not advertise STARTTLS"))
 		}
 	}
 	if strings.TrimSpace(account.SMTPUsername) != "" {
 		auth := smtp.PlainAuth("", account.SMTPUsername, password, account.SMTPHost)
 		if err := c.Auth(auth); err != nil {
-			return fmt.Errorf("authenticate to SMTP server: %w", err)
+			return deliveryError(DeliveryPhaseAuthenticate, DeliveryNotAccepted, smtpErrorTemporary(err),
+				fmt.Errorf("authenticate to SMTP server: %w", err))
 		}
 	}
 	fromAddr, err := firstAddress(account.Email)
 	if err != nil {
-		return err
+		return deliveryError(DeliveryPhaseEnvelope, DeliveryNotAccepted, false, err)
 	}
 	if err := c.Mail(fromAddr); err != nil {
-		return fmt.Errorf("SMTP MAIL FROM: %w", err)
+		return deliveryError(DeliveryPhaseEnvelope, DeliveryNotAccepted, smtpErrorTemporary(err),
+			fmt.Errorf("SMTP MAIL FROM: %w", err))
 	}
 	for _, recipient := range recipients {
 		if err := c.Rcpt(recipient); err != nil {
-			return fmt.Errorf("SMTP RCPT TO: %w", err)
+			return deliveryError(DeliveryPhaseEnvelope, DeliveryNotAccepted, smtpErrorTemporary(err),
+				fmt.Errorf("SMTP RCPT TO: %w", err))
 		}
 	}
 	w, err := c.Data()
 	if err != nil {
-		return fmt.Errorf("SMTP DATA: %w", err)
+		return deliveryError(DeliveryPhaseData, DeliveryNotAccepted, smtpErrorTemporary(err),
+			fmt.Errorf("SMTP DATA: %w", err))
 	}
-	if _, err := io.Copy(w, bytes.NewReader(raw)); err != nil {
+	if _, err := io.Copy(w, raw); err != nil {
 		_ = w.Close()
-		return fmt.Errorf("write SMTP message: %w", err)
+		// SMTP cannot accept DATA until the terminating dot is written. A body
+		// stream failure before Close is therefore safe to retry.
+		return deliveryError(DeliveryPhaseTransmit, DeliveryNotAccepted, smtpErrorTemporary(err),
+			fmt.Errorf("write SMTP message: %w", err))
 	}
 	if err := w.Close(); err != nil {
-		return fmt.Errorf("finish SMTP message: %w", err)
+		var protocol *textproto.Error
+		if errors.As(err, &protocol) {
+			// A final 4xx/5xx response is a definitive rejection, not an
+			// ambiguous connection loss.
+			return deliveryError(DeliveryPhaseAccept, DeliveryNotAccepted, smtpErrorTemporary(err),
+				fmt.Errorf("finish SMTP message: %w", err))
+		}
+		return deliveryError(DeliveryPhaseAccept, DeliveryUnknown, false,
+			fmt.Errorf("finish SMTP message: %w", err))
 	}
 	// A successful DATA close includes the server's final acceptance response.
 	// Closing the session via the deferred client close avoids waiting on QUIT
 	// after delivery and cannot misreport an accepted message as failed.
 	return nil
+}
+
+func deliveryError(phase DeliveryPhase, outcome DeliveryOutcome, temporary bool, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &DeliveryError{Phase: phase, Temporary: temporary, Outcome: outcome, Err: err}
+}
+
+func smtpErrorTemporary(err error) bool {
+	var protocol *textproto.Error
+	if errors.As(err, &protocol) {
+		return protocol.Code >= 400 && protocol.Code < 500
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout() || netErr.Temporary()
+	}
+	return !errors.Is(err, context.Canceled)
 }
 
 func watchSMTPContext(ctx context.Context, conn net.Conn) func() {
@@ -465,6 +558,16 @@ func NewMessageID(fromAddress string) string {
 		return fmt.Sprintf("<%d@rolltop.%s>", time.Now().UnixNano(), domain)
 	}
 	return fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), hex.EncodeToString(random), domain)
+}
+
+// NewSubmissionID creates an opaque compose idempotency key. It is separate
+// from Message-ID because SMTP servers do not promise Message-ID deduplication.
+func NewSubmissionID() string {
+	random := make([]byte, 24)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Sprintf("submission-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(random)
 }
 
 func writePart(w *bufio.Writer, boundary, contentType, body string) {

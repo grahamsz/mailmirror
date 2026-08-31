@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"rolltop/backend/plugins"
+	"rolltop/backend/store"
 )
 
 const (
@@ -78,10 +79,23 @@ func (s *Server) apiConversationsWithAnnotations(ctx context.Context, userID int
 		ids = append(ids, conversation.Message.ID)
 	}
 	annotations := s.pluginMessageAnnotations(ctx, userID, ids, nil)
+	outboxStates, _ := s.store.OutboxMessageStatesForUser(ctx, userID, ids)
 	for i := range out {
 		out[i].Message.Annotations = annotations[out[i].Message.ID]
+		applyOutboxMessageState(&out[i].Message, outboxStates[out[i].Message.ID])
 	}
 	return out
+}
+
+func applyOutboxMessageState(message *apiMessage, state store.OutboxMessageState) {
+	if message == nil || state.OutboxID <= 0 {
+		return
+	}
+	message.OutboxID = state.OutboxID
+	message.DeliveryState = state.DeliveryState
+	message.FilingState = state.FilingState
+	message.DeliveryError = state.LastError
+	message.NeedsAttention = state.Attention
 }
 
 func cleanPluginAnnotationText(value string) string {

@@ -1,0 +1,357 @@
+.outbox-page {
+  width: min(100%, 980px);
+  margin: 0 auto;
+  display: grid;
+  gap: 22px;
+}
+
+.outbox-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 8px 2px 18px;
+  border-bottom: 1px solid var(--border);
+
+  h1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 3px 0 4px;
+    font-size: 28px;
+
+    .icon {
+      color: var(--accent-warm, var(--accent));
+    }
+  }
+
+  p {
+    max-width: 680px;
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+}
+
+.outbox-eyebrow {
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.outbox-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.outbox-summary-card {
+  min-height: 82px;
+  padding: 15px 17px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+
+  strong {
+    font-size: 24px;
+    line-height: 1;
+  }
+
+  span {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &.active {
+    border-color: color-mix(in srgb, var(--accent-warm, var(--accent)) 45%, var(--border));
+    background: color-mix(in srgb, var(--accent-warm, var(--accent)) 7%, var(--surface));
+  }
+
+  &.danger strong {
+    color: var(--danger);
+  }
+}
+
+.outbox-empty {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  text-align: center;
+
+  > span {
+    width: 60px;
+    height: 60px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--surface-subtle);
+    color: var(--muted);
+  }
+
+  .icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  h2,
+  p {
+    margin: 0;
+  }
+
+  p {
+    max-width: 480px;
+    color: var(--muted);
+  }
+}
+
+.outbox-section,
+.outbox-list {
+  display: grid;
+  gap: 12px;
+}
+
+.outbox-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  span {
+    min-width: 23px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--surface-subtle);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-align: center;
+  }
+}
+
+.outbox-card {
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent-warm, var(--accent));
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 5%, transparent);
+
+  &.danger {
+    border-left-color: var(--danger);
+  }
+
+  &.warning {
+    border-left-color: #b27920;
+  }
+
+  &.complete,
+  &.quiet {
+    border-left-color: var(--border);
+    box-shadow: none;
+  }
+}
+
+.outbox-card-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 18px;
+
+  > p {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+}
+
+.outbox-subject {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 800;
+  text-align: left;
+  overflow-wrap: anywhere;
+  box-shadow: none;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--accent-strong);
+    text-decoration: underline;
+  }
+}
+
+.outbox-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+
+  &.danger {
+    color: var(--danger);
+  }
+}
+
+.outbox-state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.outbox-state.active .outbox-state-dot {
+  animation: outbox-pulse 1.6s ease-in-out infinite;
+}
+
+.outbox-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.outbox-steps {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  list-style: none;
+
+  li {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    color: var(--muted);
+    text-align: center;
+
+    &::before {
+      content: "";
+      position: absolute;
+      top: 10px;
+      right: 50%;
+      left: -50%;
+      height: 2px;
+      background: var(--border);
+      z-index: 0;
+    }
+
+    &:first-child::before {
+      display: none;
+    }
+
+    > span {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      border: 2px solid var(--border);
+      border-radius: 50%;
+      background: var(--surface);
+      font-size: 12px;
+      font-weight: 900;
+      z-index: 1;
+    }
+
+    &.done {
+      color: var(--accent-strong);
+
+      &::before,
+      > span {
+        border-color: var(--accent-warm, var(--accent));
+        background: var(--accent-warm, var(--accent));
+        color: white;
+      }
+    }
+
+    &.current > span {
+      border-color: var(--accent-warm, var(--accent));
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-warm, var(--accent)) 14%, transparent);
+    }
+
+    &.error {
+      color: var(--danger);
+
+      > span {
+        border-color: var(--danger);
+      }
+    }
+  }
+}
+
+.outbox-error {
+  padding: 12px 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  color: var(--danger);
+
+  p {
+    margin: 3px 0 0;
+    color: var(--text);
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+}
+
+.outbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@keyframes outbox-pulse {
+  50% {
+    opacity: .35;
+    transform: scale(.75);
+  }
+}
+
+@media (max-width: 680px) {
+  .outbox-heading {
+    display: grid;
+  }
+
+  .outbox-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .outbox-card-main {
+    grid-template-columns: 1fr;
+  }
+
+  .outbox-state,
+  .outbox-card-main > p,
+  .outbox-meta {
+    grid-column: 1;
+  }
+
+  .outbox-steps small {
+    font-size: 10px;
+  }
+}

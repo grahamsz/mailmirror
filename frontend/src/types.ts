@@ -84,8 +84,49 @@ export type Message = {
   has_attachments: boolean;
   is_encrypted: boolean;
   is_signed: boolean;
+  outbox_id?: number;
+  delivery_state?: string;
+  filing_state?: string;
+  delivery_error?: string;
+  needs_attention?: boolean;
   snippet: string;
   annotations?: MessageAnnotation[];
+};
+
+/** OutboxSummary is durable send state kept in bootstrap and chrome events. */
+export type OutboxSummary = {
+  active: number;
+  needs_attention: number;
+  latest_id: number;
+};
+
+/** OutboxJob describes one queued send and its independent SMTP/Sent-copy states. */
+export type OutboxJob = {
+  id: number;
+  message_id: number;
+  subject: string;
+  delivery_state: string;
+  filing_state: string;
+  attempt_count: number;
+  filing_attempt_count: number;
+  next_attempt_at: string;
+  last_error: string;
+  needs_attention: boolean;
+  can_cancel: boolean;
+  can_retry: boolean;
+  retry_may_duplicate: boolean;
+  smtp_accepted_at: string;
+  completed_at: string;
+  created_at: string;
+  updated_at: string;
+  raw_size: number;
+  appended_uid: number;
+  appended_uid_validity: number;
+};
+
+export type OutboxResponse = {
+  jobs: OutboxJob[];
+  summary: OutboxSummary;
 };
 
 /** MessageAnnotation is compact, non-sensitive metadata supplied by an enabled backend plugin. */
@@ -375,6 +416,16 @@ export type Contact = {
   icon_url: string;
 };
 
+/** ContactInteraction is compact recent-mail context shown on a contact profile. */
+export type ContactInteraction = {
+  message_id: number;
+  subject: string;
+  from_addr: string;
+  date: string;
+  direction: "received" | "sent" | string;
+  has_attachments: boolean;
+};
+
 /** ContactAutocomplete is a flattened recipient suggestion for compose. */
 export type ContactAutocomplete = {
   contact_id: number;
@@ -498,6 +549,7 @@ export type Bootstrap = {
   build_label?: string;
   build_commit?: string;
   public_site_url?: string;
+  outbox?: OutboxSummary;
 };
 
 export type AuthProvider = {
@@ -521,6 +573,7 @@ export type ChromeEvent = {
   build_label?: string;
   build_commit?: string;
   public_site_url?: string;
+  outbox?: OutboxSummary;
 };
 
 /** ComposeExistingAttachment is an already-stored attachment that compose can reuse without a new upload. */
@@ -557,6 +610,7 @@ export type IdentityPGPPrivateKey = {
 };
 
 export type ComposeForm = {
+  submission_key?: string;
   to: string;
   cc: string;
   bcc: string;

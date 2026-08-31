@@ -3,10 +3,12 @@
 package blob
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,6 +44,23 @@ func (s *Store) SaveRawMessage(userID, accountID int64, mailbox string, uid uint
 		name,
 	}
 	return s.save(parts, raw, hash)
+}
+
+// SaveOutboxMessage durably spools one immutable RFC822 payload before the
+// compose request reports that it was queued. The submission key is hashed so
+// browser-controlled identifiers never become path components.
+func (s *Store) SaveOutboxMessage(userID int64, submissionKey string, raw []byte) (Saved, error) {
+	if userID <= 0 || strings.TrimSpace(submissionKey) == "" || len(raw) == 0 {
+		return Saved{}, errors.New("invalid outbox message")
+	}
+	rawSum := sha256.Sum256(raw)
+	rawHash := hex.EncodeToString(rawSum[:])
+	keySum := sha256.Sum256([]byte(strings.TrimSpace(submissionKey)))
+	name := fmt.Sprintf("%s-%s.eml", hex.EncodeToString(keySum[:8]), rawHash[:16])
+	parts := []string{
+		"users", strconv.FormatInt(userID, 10), "blobs", "outbox", name,
+	}
+	return s.saveDurable(parts, raw, rawHash)
 }
 
 // SaveAttachment writes a standalone attachment body for the owning user when retention rules allow it.
@@ -103,6 +122,71 @@ func (s *Store) save(parts []string, data []byte, hash string) (Saved, error) {
 		return Saved{}, err
 	}
 	return Saved{Path: rel, SHA256: hash, Size: int64(len(data))}, nil
+}
+
+func (s *Store) saveDurable(parts []string, data []byte, hash string) (Saved, error) {
+	rel := filepath.Join(parts...)
+	if filepath.IsAbs(rel) || strings.Contains(rel, "..") {
+		return Saved{}, errors.New("unsafe blob path")
+	}
+	abs := filepath.Join(s.Root, rel)
+	dir := filepath.Dir(abs)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Saved{}, err
+	}
+	// Persist the new outbox-directory entry before relying on a file inside it.
+	if err := syncDirectory(filepath.Dir(dir)); err != nil {
+		return Saved{}, err
+	}
+	tmp, err := os.CreateTemp(dir, ".outbox-*.tmp")
+	if err != nil {
+		return Saved{}, err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		cleanup()
+		return Saved{}, err
+	}
+	if _, err := io.Copy(tmp, bytes.NewReader(data)); err != nil {
+		cleanup()
+		return Saved{}, err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return Saved{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return Saved{}, err
+	}
+	if err := os.Rename(tmpName, abs); err != nil {
+		_ = os.Remove(tmpName)
+		return Saved{}, err
+	}
+	if err := syncDirectory(dir); err != nil {
+		return Saved{}, err
+	}
+	return Saved{Path: rel, SHA256: hash, Size: int64(len(data))}, nil
+}
+
+func syncDirectory(dir string) error {
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	syncErr := dirHandle.Sync()
+	closeErr := dirHandle.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return nil
 }
 
 // OpenUserBlob opens a previously recorded blob path only inside the requested user directory.

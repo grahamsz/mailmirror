@@ -32,6 +32,7 @@ func queueMailboxGenerationBlobCleanupTx(ctx context.Context, tx *sql.Tx, userID
 		FROM messages message
 		JOIN blobs blob ON blob.user_id = message.user_id AND blob.id = message.blob_id
 		WHERE message.user_id = ? AND message.account_id = ? AND message.mailbox_id = ?
+			AND message.outbox_job_id = 0
 		ON CONFLICT(user_id, blob_id) DO UPDATE SET
 			account_id = excluded.account_id,
 			mailbox_id = excluded.mailbox_id,

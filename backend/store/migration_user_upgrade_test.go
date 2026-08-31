@@ -466,7 +466,7 @@ func assertSplitDatabaseContainsOnlyUser(t *testing.T, ctx context.Context, db *
 	if ownerCount != 1 || otherCount != 0 {
 		t.Fatalf("split user mirror counts = owner %d other %d", ownerCount, otherCount)
 	}
-	for _, table := range []string{"mail_accounts", "mailboxes", "blobs", "messages", "new_mail_events", "message_snoozes", "snooze_reminder_events", "web_push_subscriptions", "pending_move_notifications", "message_transfers"} {
+	for _, table := range []string{"mail_accounts", "mailboxes", "blobs", "messages", "new_mail_events", "message_snoozes", "snooze_reminder_events", "web_push_subscriptions", "pending_move_notifications", "message_transfers", "outbox_jobs", "outbox_attempts"} {
 		var foreignRows int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE user_id <> ?`, ownerID).Scan(&foreignRows); err != nil {
 			t.Fatal(err)
@@ -534,6 +534,7 @@ func currentUserMigrationSetsForUpgradeTest() []migrationSet {
 		userMailboxGenerationArrivalFloorMigrationSet(),
 		userMessageImportCompletionMigrationSet(),
 		userSearchProgressIndexMigrationSet(),
+		userOutboxMigrationSet(),
 	)
 }
 

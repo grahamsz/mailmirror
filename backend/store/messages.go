@@ -363,7 +363,8 @@ func (s *Store) PurgeMailboxMessageBatch(ctx context.Context, userID, accountID,
 	}
 	rows, err := db.QueryContext(ctx, `SELECT id, user_id, account_id, mailbox_id, blob_id, message_id_header, in_reply_to, references_header, thread_key, subject, language_code, from_addr, to_addr, cc_addr,
 			date_unix, internal_date_unix, uid, size, blob_path, body_text, body_html, is_read, read_sync_pending, is_starred, star_sync_pending, has_attachments, is_encrypted, is_signed, attachment_indexed_at, created_at, updated_at
-		FROM messages WHERE user_id = ? AND account_id = ? AND mailbox_id = ? ORDER BY id LIMIT ?`, userID, accountID, mailboxID, limit)
+		FROM messages WHERE user_id = ? AND account_id = ? AND mailbox_id = ?
+			AND outbox_job_id = 0 ORDER BY id LIMIT ?`, userID, accountID, mailboxID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +453,8 @@ func (s *Store) deleteMessagesMissingUIDs(ctx context.Context, userID, accountID
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, user_id, account_id, mailbox_id, blob_id, message_id_header, in_reply_to, references_header, thread_key, subject, language_code, from_addr, to_addr, cc_addr,
 			date_unix, internal_date_unix, uid, size, blob_path, body_text, body_html, is_read, read_sync_pending, is_starred, star_sync_pending, has_attachments, is_encrypted, is_signed, attachment_indexed_at, created_at, updated_at
-		FROM messages WHERE user_id = ? AND account_id = ? AND mailbox_id = ?`, userID, accountID, mailboxID)
+		FROM messages WHERE user_id = ? AND account_id = ? AND mailbox_id = ?
+			AND outbox_job_id = 0`, userID, accountID, mailboxID)
 	if err != nil {
 		return nil, err
 	}

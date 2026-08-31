@@ -53,6 +53,54 @@
   }
 }
 
+.thread-outbox-banner {
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 18px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-warm) 28%, var(--border));
+  border-radius: 0;
+  background: color-mix(in srgb, var(--accent-warm) 8%, var(--surface));
+  color: var(--text);
+  text-align: left;
+  box-shadow: none;
+
+  > span {
+    display: grid;
+    gap: 1px;
+  }
+
+  small {
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  > span:last-child {
+    color: var(--accent-strong);
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  &.danger {
+    border-color: color-mix(in srgb, var(--danger) 32%, var(--border));
+    background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+
+    > .icon,
+    > span:last-child {
+      color: var(--danger);
+    }
+  }
+
+  &.warning > .icon {
+    color: var(--warning, #a85d24);
+  }
+}
+
 .thread-summary {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;

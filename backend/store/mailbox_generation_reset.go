@@ -44,7 +44,8 @@ func (s *Store) ResetMailboxForRemoteGeneration(ctx context.Context, userID, acc
 	var messageCount, unprovenCount int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE
 		WHEN uid_validity <= 0 OR uid_validity <> ? THEN 1 ELSE 0 END), 0)
-		FROM messages WHERE user_id = ? AND account_id = ? AND mailbox_id = ?`,
+		FROM messages WHERE user_id = ? AND account_id = ? AND mailbox_id = ?
+			AND outbox_job_id = 0`,
 		remoteUIDValidity, userID, accountID, mailboxID).Scan(&messageCount, &unprovenCount); err != nil {
 		return nil, false, err
 	}
@@ -71,6 +72,7 @@ func (s *Store) ResetMailboxForRemoteGeneration(ctx context.Context, userID, acc
 	// transaction hold SQLite's writer lock for minutes on a large mailbox.
 	rows, err := tx.QueryContext(ctx, `SELECT id, user_id FROM messages
 		WHERE user_id = ? AND account_id = ? AND mailbox_id = ?
+			AND outbox_job_id = 0
 		ORDER BY id`, userID, accountID, mailboxID)
 	if err != nil {
 		return nil, false, err
@@ -100,7 +102,8 @@ func (s *Store) ResetMailboxForRemoteGeneration(ctx context.Context, userID, acc
 		return nil, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM messages
-		WHERE user_id = ? AND account_id = ? AND mailbox_id = ?`, userID, accountID, mailboxID); err != nil {
+		WHERE user_id = ? AND account_id = ? AND mailbox_id = ?
+			AND outbox_job_id = 0`, userID, accountID, mailboxID); err != nil {
 		return nil, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE mailboxes SET uidvalidity = ?, last_uid = 0, updated_at = ?

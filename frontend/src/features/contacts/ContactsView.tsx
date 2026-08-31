@@ -4,10 +4,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api } from "../../api";
-import type { Contact, ContactAddress, ContactEmail, ContactPhone, ContactURL } from "../../types";
+import type { Contact, ContactAddress, ContactEmail, ContactInteraction, ContactPhone, ContactURL } from "../../types";
 import type { Toast } from "../../appTypes";
 import { Icon } from "../../components/Icon";
 import { messageFromError } from "../../lib/errors";
+import { messageURL, searchURL } from "../../lib/routes";
 import type { RuntimePlugin } from "../../plugins/runtime";
 import { contactKeyEditors } from "../../plugins/contactDetails";
 
@@ -15,10 +16,14 @@ import { contactKeyEditors } from "../../plugins/contactDetails";
 export function ContactsView({
   csrf,
   contactPlugins,
+  navigate,
+  openCompose,
   addToast
 }: {
   csrf: string;
   contactPlugins: readonly RuntimePlugin[];
+  navigate: (url: string) => void;
+  openCompose: (query?: string) => void;
   addToast: (message: string, kind?: Toast["kind"]) => number;
 }) {
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -27,6 +32,9 @@ export function ContactsView({
   const [draft, setDraft] = useState<Contact>(() => blankContact());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [interactions, setInteractions] = useState<ContactInteraction[]>([]);
+  const [interactionsLoading, setInteractionsLoading] = useState(false);
   const importRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
@@ -43,6 +51,7 @@ export function ContactsView({
         } else {
           setSelectedID("new");
           setDraft(blankContact());
+          setEditing(true);
         }
       } else if (selectedID !== "new") {
         const selected = nextContacts.find((contact) => contact.id === selectedID);
@@ -50,6 +59,7 @@ export function ContactsView({
         else {
           setSelectedID("new");
           setDraft(blankContact());
+          setEditing(true);
         }
       }
     } finally {
@@ -63,14 +73,42 @@ export function ContactsView({
 
   const selected = useMemo(() => contacts.find((contact) => contact.id === selectedID) || null, [contacts, selectedID]);
 
+  useEffect(() => {
+    if (!selected?.id || editing) {
+      setInteractions([]);
+      setInteractionsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setInteractionsLoading(true);
+    api.contactInteractions(selected.id)
+      .then((data) => {
+        if (!cancelled) setInteractions(data.interactions || []);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setInteractions([]);
+          addToast(messageFromError(err), "error");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setInteractionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [addToast, editing, selected?.id]);
+
   function choose(contact: Contact) {
     setSelectedID(contact.id);
     setDraft(cloneContact(contact));
+    setEditing(false);
   }
 
   function newContact() {
     setSelectedID("new");
     setDraft(blankContact());
+    setEditing(true);
   }
 
   function setField<K extends keyof Contact>(field: K, value: Contact[K]) {
@@ -85,7 +123,14 @@ export function ContactsView({
       addToast("Contact saved.");
       setSelectedID(data.contact.id);
       setDraft(cloneContact(data.contact));
-      await load();
+      setContacts((current) => {
+        const next = current.some((contact) => contact.id === data.contact.id)
+          ? current.map((contact) => contact.id === data.contact.id ? data.contact : contact)
+          : [...current, data.contact];
+        return sortContacts(next);
+      });
+      setEditing(false);
+      if (query) setQuery("");
     } catch (err) {
       addToast(messageFromError(err), "error");
     } finally {
@@ -94,13 +139,23 @@ export function ContactsView({
   }
 
   async function deleteContact() {
-    if (!draft.id) return;
+    const contactID = selected?.id || draft.id;
+    if (!contactID || !window.confirm("Delete this contact?")) return;
     try {
-      await api.deleteContact(csrf, draft.id);
+      await api.deleteContact(csrf, contactID);
       addToast("Contact deleted.");
-      setSelectedID("new");
-      setDraft(blankContact());
-      await load();
+      const remaining = contacts.filter((contact) => contact.id !== contactID);
+      setContacts(remaining);
+      const next = remaining[0] || null;
+      if (next) {
+        setSelectedID(next.id);
+        setDraft(cloneContact(next));
+        setEditing(false);
+      } else {
+        setSelectedID("new");
+        setDraft(blankContact());
+        setEditing(true);
+      }
     } catch (err) {
       addToast(messageFromError(err), "error");
     }
@@ -143,6 +198,20 @@ export function ContactsView({
     }
   }
 
+  function cancelEditing() {
+    if (selected) {
+      setDraft(cloneContact(selected));
+      setEditing(false);
+      return;
+    }
+    const first = contacts[0];
+    if (first) {
+      choose(first);
+    } else {
+      setDraft(blankContact());
+    }
+  }
+
   return (
     <>
       <div className="content-head">
@@ -152,15 +221,15 @@ export function ContactsView({
         </div>
         <div className="contact-actions">
           <button className="secondary" type="button" onClick={newContact}>
-            <Icon name="edit" />
+            <Icon name="add" />
             New
           </button>
           <button className="secondary" type="button" onClick={() => importRef.current?.click()}>
-            <Icon name="archive" />
+            <Icon name="upload" />
             Import VCF
           </button>
           <a className="button secondary" href="/api/contacts/export">
-            <Icon name="send" />
+            <Icon name="download" />
             Export VCF
           </a>
           <input ref={importRef} type="file" accept=".vcf,text/vcard,text/x-vcard" hidden onChange={(event) => void importContacts(event.target.files?.[0] || null)} />
@@ -191,7 +260,17 @@ export function ContactsView({
             ))}
           </div>
         </aside>
-        <form className="contact-editor" onSubmit={save}>
+        {editing || !selected ? <form className="contact-editor" onSubmit={save}>
+          <div className="contact-editor-toolbar">
+            <div>
+              <span className="eyebrow">{draft.id ? "Edit contact" : "New contact"}</span>
+              <h2>{draft.display_name || primaryEmail(draft) || "Contact details"}</h2>
+            </div>
+            <button className="ghost" type="button" onClick={cancelEditing}>
+              <Icon name="close" />
+              Cancel
+            </button>
+          </div>
           <div className="contact-editor-head">
             <ContactAvatar contact={draft} large />
             <div>
@@ -252,12 +331,229 @@ export function ContactsView({
           </label>
           <div className="contact-savebar">
             <button disabled={saving}>{saving ? "Saving..." : "Save contact"}</button>
-            {selected ? <button className="secondary" type="button" onClick={() => void deleteContact()}>Delete</button> : null}
+            <button className="secondary" type="button" onClick={cancelEditing}>Cancel</button>
+            {selected ? <button className="ghost danger" type="button" onClick={() => void deleteContact()}>Delete</button> : null}
           </div>
-        </form>
+        </form> : (
+          <ContactProfile
+            contact={selected}
+            interactions={interactions}
+            interactionsLoading={interactionsLoading}
+            onEdit={() => {
+              setDraft(cloneContact(selected));
+              setEditing(true);
+            }}
+            onDelete={() => void deleteContact()}
+            onCompose={(email) => openCompose(`to=${encodeURIComponent(email)}`)}
+            onFindMail={(email) => navigate(searchURL(email))}
+            onOpenMessage={(messageID) => navigate(messageURL(messageID, "", [], "/contacts"))}
+          />
+        )}
       </section>
     </>
   );
+}
+
+function ContactProfile({
+  contact,
+  interactions,
+  interactionsLoading,
+  onEdit,
+  onDelete,
+  onCompose,
+  onFindMail,
+  onOpenMessage
+}: {
+  contact: Contact;
+  interactions: ContactInteraction[];
+  interactionsLoading: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+  onCompose: (email: string) => void;
+  onFindMail: (email: string) => void;
+  onOpenMessage: (messageID: number) => void;
+}) {
+  const email = primaryEmail(contact);
+  const name = contact.display_name || email || "Unnamed contact";
+  const role = [contact.job_title, contact.organization].filter(Boolean).join(" at ");
+  const phones = contact.phones.filter((item) => item.number.trim());
+  const addresses = contact.addresses.filter((item) => formatAddress(item));
+  const urls = contact.urls.filter((item) => externalURL(item.url));
+  const keys = contact.pgp_keys || [];
+  const hasAbout = Boolean(role || contact.department || contact.birthday || contact.categories || contact.notes);
+
+  return (
+    <article className="contact-profile">
+      <header className="contact-profile-hero">
+        <div className="contact-profile-tools">
+          <button className="secondary" type="button" onClick={onEdit}>
+            <Icon name="edit" />
+            Edit
+          </button>
+          <button className="ghost icon-only danger" type="button" title="Delete contact" aria-label="Delete contact" onClick={onDelete}>
+            <Icon name="delete" />
+          </button>
+        </div>
+        <div className="contact-profile-identity">
+          <div className="contact-profile-avatar">
+            <ContactAvatar contact={contact} large />
+          </div>
+          <div>
+            <h2>{name}</h2>
+            {role ? <p>{role}</p> : email ? <p>{email}</p> : <p className="muted">Add an email or organization</p>}
+            <div className="contact-profile-badges">
+              {contact.nickname ? <span>{contact.nickname}</span> : null}
+              {contact.is_me ? <span>Me identity</span> : null}
+              {contact.is_primary ? <span>Primary sender</span> : null}
+            </div>
+          </div>
+        </div>
+        {email ? (
+          <div className="contact-profile-actions" aria-label="Contact actions">
+            <button type="button" onClick={() => onCompose(email)}>
+              <span><Icon name="mail" /></span>
+              Email
+            </button>
+            <button type="button" onClick={() => onFindMail(email)}>
+              <span><Icon name="search" /></span>
+              Find mail
+            </button>
+          </div>
+        ) : null}
+      </header>
+
+      <div className="contact-profile-grid">
+        <section className="contact-profile-card">
+          <h3>Contact details</h3>
+          <div className="contact-detail-list">
+            {contact.emails.filter((item) => item.email.trim()).map((item, index) => (
+              <div className="contact-detail-row" key={`email-${item.id || index}`}>
+                <Icon name="mail" />
+                <button className="contact-detail-value" type="button" onClick={() => onCompose(item.email)}>
+                  {item.email}
+                </button>
+                <DetailLabel label={item.label} primary={item.is_primary} />
+              </div>
+            ))}
+            {phones.map((item, index) => (
+              <div className="contact-detail-row" key={`phone-${item.id || index}`}>
+                <Icon name="phone" />
+                <a className="contact-detail-value" href={`tel:${item.number}`}>{item.number}</a>
+                <DetailLabel label={item.label} primary={item.is_primary} />
+              </div>
+            ))}
+            {addresses.map((item, index) => (
+              <div className="contact-detail-row contact-detail-row-address" key={`address-${item.id || index}`}>
+                <Icon name="location" />
+                <address className="contact-detail-value">{formatAddress(item)}</address>
+                <DetailLabel label={item.label} primary={item.is_primary} />
+              </div>
+            ))}
+            {urls.map((item, index) => (
+              <div className="contact-detail-row" key={`url-${item.id || index}`}>
+                <Icon name="link" />
+                <a className="contact-detail-value" href={externalURL(item.url)} target="_blank" rel="noreferrer">
+                  {displayURL(item.url)}
+                </a>
+                <DetailLabel label={item.label} primary={item.is_primary} />
+              </div>
+            ))}
+            {!email && phones.length === 0 && addresses.length === 0 && urls.length === 0 ? (
+              <p className="contact-card-empty">No contact details yet.</p>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="contact-profile-card contact-interactions-card">
+          <div className="contact-profile-card-head">
+            <h3>Recent interactions</h3>
+            {email ? <button className="ghost text-link" type="button" onClick={() => onFindMail(email)}>All mail</button> : null}
+          </div>
+          {interactionsLoading ? <p className="contact-card-empty">Looking for recent mail…</p> : null}
+          {!interactionsLoading && interactions.length === 0 ? (
+            <p className="contact-card-empty">No recent mail found for this contact.</p>
+          ) : null}
+          <div className="contact-interaction-list">
+            {interactions.map((item) => (
+              <button type="button" key={item.message_id} onClick={() => onOpenMessage(item.message_id)}>
+                <span className={`contact-interaction-icon ${item.direction}`}>
+                  <Icon name={item.direction === "sent" ? "send" : "mail"} />
+                </span>
+                <span>
+                  <strong>{item.subject || "(No subject)"}</strong>
+                  <small>
+                    {item.direction === "sent" ? "Sent" : "Received"} · {formatInteractionDate(item.date)}
+                    {item.has_attachments ? " · Attachment" : ""}
+                  </small>
+                </span>
+                <Icon name="chevron_right" />
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {hasAbout ? (
+          <section className="contact-profile-card">
+            <h3>About</h3>
+            <div className="contact-about-list">
+              {role || contact.department ? (
+                <div>
+                  <Icon name="building" />
+                  <span>
+                    {role || contact.organization}
+                    {contact.department ? <small>{contact.department}</small> : null}
+                  </span>
+                </div>
+              ) : null}
+              {contact.birthday ? (
+                <div>
+                  <Icon name="calendar" />
+                  <span>{formatBirthday(contact.birthday)}</span>
+                </div>
+              ) : null}
+              {contact.categories ? (
+                <div>
+                  <Icon name="label" />
+                  <span className="contact-category-list">
+                    {contact.categories.split(/[,;]/).map((category) => category.trim()).filter(Boolean).map((category) => <em key={category}>{category}</em>)}
+                  </span>
+                </div>
+              ) : null}
+              {contact.notes ? (
+                <div className="contact-about-notes">
+                  <Icon name="file_text" />
+                  <p>{contact.notes}</p>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
+
+        {keys.length > 0 ? (
+          <section className="contact-profile-card">
+            <h3>PGP public keys</h3>
+            <div className="contact-key-list">
+              {keys.map((key, index) => (
+                <div key={key.id || key.fingerprint || index}>
+                  <Icon name="key" />
+                  <span>
+                    <strong>{key.label || key.email || "Public key"}</strong>
+                    <small>{formatFingerprint(key.fingerprint || key.key_id)}</small>
+                  </span>
+                  {key.is_preferred ? <em>Preferred</em> : null}
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function DetailLabel({ label, primary }: { label: string; primary: boolean }) {
+  const text = [label.trim(), primary ? "Primary" : ""].filter(Boolean).join(" · ");
+  return text ? <small className="contact-detail-label">{text}</small> : null;
 }
 
 function Field({
@@ -414,6 +710,61 @@ function primaryEmail(contact: Contact): string {
   return contact.emails.find((email) => email.is_primary && email.email.trim())?.email || contact.emails.find((email) => email.email.trim())?.email || "";
 }
 
+function sortContacts(contacts: Contact[]): Contact[] {
+  return [...contacts].sort((left, right) => {
+    const leftName = left.display_name || primaryEmail(left);
+    const rightName = right.display_name || primaryEmail(right);
+    return leftName.localeCompare(rightName, undefined, { sensitivity: "base" });
+  });
+}
+
+function formatAddress(address: ContactAddress): string {
+  return [
+    address.street.trim(),
+    [address.locality.trim(), address.region.trim(), address.postal_code.trim()].filter(Boolean).join(" "),
+    address.country.trim()
+  ].filter(Boolean).join(", ");
+}
+
+function externalURL(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function displayURL(value: string): string {
+  return value.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "");
+}
+
+function formatInteractionDate(value: string): string {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "Unknown date";
+  const now = new Date();
+  if (date.getFullYear() === now.getFullYear()) {
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+  }
+  return new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" }).format(date);
+}
+
+function formatBirthday(value: string): string {
+  const trimmed = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (!match) return trimmed;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(date.getTime())) return trimmed;
+  return new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" }).format(date);
+}
+
+function formatFingerprint(value: string): string {
+  const compact = value.replace(/\s/g, "").toUpperCase();
+  if (!compact) return "Fingerprint unavailable";
+  return compact.match(/.{1,4}/g)?.join(" ") || compact;
+}
 
 function updateAt<T>(items: T[], index: number, value: T): T[] {
   return items.map((item, itemIndex) => itemIndex === index ? value : item);

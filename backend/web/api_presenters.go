@@ -274,6 +274,7 @@ func (s *Server) apiThreadMessagesTimed(ctx context.Context, userID int64, views
 		messageIDs = append(messageIDs, view.Message.ID)
 	}
 	messageAnnotations := s.pluginMessageAnnotations(ctx, userID, messageIDs, backendPlugins)
+	outboxStates, _ := s.store.OutboxMessageStatesForUser(ctx, userID, messageIDs)
 	bimiEnabled := s.pluginEnabled(ctx, plugins.BIMIBrandIcons)
 	gravatarEnabled := s.pluginEnabled(ctx, plugins.GravatarSenderIcons)
 	var userDB *sql.DB
@@ -345,6 +346,7 @@ func (s *Server) apiThreadMessagesTimed(ctx context.Context, userID int64, views
 		stop()
 		apiMsg := apiMessageFromRecord(view.Message, view.Snippet)
 		apiMsg.Annotations = messageAnnotations[view.Message.ID]
+		applyOutboxMessageState(&apiMsg, outboxStates[view.Message.ID])
 		out = append(out, apiThreadMessage{
 			Message:            apiMsg,
 			Attachments:        atts,

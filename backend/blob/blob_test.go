@@ -3,6 +3,9 @@
 package blob
 
 import (
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -23,6 +26,48 @@ func TestSaveRawMessageUsesUserDataDirectoryLayout(t *testing.T) {
 	}
 	if _, err := store.OpenUserBlob(43, saved.Path); err == nil {
 		t.Fatal("other user opened blob")
+	}
+}
+
+func TestSaveOutboxMessageIsDurableAndTenantScoped(t *testing.T) {
+	store := New(t.TempDir())
+	raw := []byte("From: sender@example.test\r\nTo: recipient@example.test\r\n\r\nqueued")
+	saved, err := store.SaveOutboxMessage(42, "stable/submission key", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(saved.Path, "users/42/blobs/outbox/") || !strings.HasSuffix(saved.Path, ".eml") {
+		t.Fatalf("outbox path=%q", saved.Path)
+	}
+	file, err := store.OpenUserBlob(42, saved.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := io.ReadAll(file)
+	info, statErr := file.Stat()
+	_ = file.Close()
+	if readErr != nil || statErr != nil {
+		t.Fatalf("read=%v stat=%v", readErr, statErr)
+	}
+	if string(got) != string(raw) {
+		t.Fatalf("saved raw=%q, want %q", got, raw)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("outbox permissions=%#o, want owner-only", info.Mode().Perm())
+	}
+	if _, err := store.OpenUserBlob(43, saved.Path); err == nil {
+		t.Fatal("other user opened queued message")
+	}
+	// Idempotent retries replace the same immutable submission path cleanly.
+	again, err := store.SaveOutboxMessage(42, "stable/submission key", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Path != saved.Path || again.SHA256 != saved.SHA256 {
+		t.Fatalf("idempotent save=%+v, want path/hash from %+v", again, saved)
+	}
+	if _, err := os.Stat(filepath.Join(store.Root, saved.Path)); err != nil {
+		t.Fatalf("durable outbox file missing: %v", err)
 	}
 }
 

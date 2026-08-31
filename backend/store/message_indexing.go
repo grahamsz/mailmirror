@@ -187,7 +187,8 @@ func (s *Store) ListMessagesWithReadSyncPending(ctx context.Context, userID int6
 	}
 	rows, err := s.mustDataDB(ctx, userID).QueryContext(ctx, `SELECT id, user_id, account_id, mailbox_id, blob_id, message_id_header, in_reply_to, references_header, thread_key, subject, language_code, from_addr, to_addr, cc_addr,
 			date_unix, internal_date_unix, uid, size, blob_path, body_text, body_html, is_read, read_sync_pending, is_starred, star_sync_pending, has_attachments, is_encrypted, is_signed, attachment_indexed_at, created_at, updated_at
-		FROM messages WHERE user_id = ? AND read_sync_pending = 1 ORDER BY updated_at LIMIT ?`, userID, limit)
+		FROM messages WHERE user_id = ? AND read_sync_pending = 1
+			AND outbox_job_id = 0 ORDER BY updated_at LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +203,8 @@ func (s *Store) ListMessagesWithStarSyncPending(ctx context.Context, userID int6
 	}
 	rows, err := s.mustDataDB(ctx, userID).QueryContext(ctx, `SELECT id, user_id, account_id, mailbox_id, blob_id, message_id_header, in_reply_to, references_header, thread_key, subject, language_code, from_addr, to_addr, cc_addr,
 			date_unix, internal_date_unix, uid, size, blob_path, body_text, body_html, is_read, read_sync_pending, is_starred, star_sync_pending, has_attachments, is_encrypted, is_signed, attachment_indexed_at, created_at, updated_at
-		FROM messages WHERE user_id = ? AND star_sync_pending = 1 ORDER BY updated_at LIMIT ?`, userID, limit)
+		FROM messages WHERE user_id = ? AND star_sync_pending = 1
+			AND outbox_job_id = 0 ORDER BY updated_at LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err
 	}

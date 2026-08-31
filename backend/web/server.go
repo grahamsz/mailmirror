@@ -120,6 +120,10 @@ type Server struct {
 	snoozePushRunning         map[int64]bool
 	snoozePushDirty           map[int64]bool
 	snoozeSchedulerWake       chan struct{}
+	outboxCancel              context.CancelFunc
+	outboxWake                chan struct{}
+	outboxWG                  sync.WaitGroup
+	outboxWorkerID            string
 	// backgroundCtx bounds every fire-and-forget goroutine the server spawns
 	// (bulk read-state pushes and similar). Canceling it at Close stops new
 	// work and lets in-flight iterations exit promptly.
@@ -144,6 +148,10 @@ type currentUser struct {
 
 type mailSender interface {
 	Send(ctx context.Context, account store.MailAccount, msg smtpclient.Message) ([]byte, error)
+}
+
+type rawMailSender interface {
+	SendRawReader(ctx context.Context, account store.MailAccount, recipients []string, raw io.Reader) error
 }
 
 type viewData struct {
@@ -217,6 +225,7 @@ type composeForm struct {
 	ForwardAttachmentID  int64                       `json:"forward_attachment_message_id,omitempty"`
 	ForwardAttachment    *composeExistingAttachment  `json:"forward_attachment,omitempty"`
 	Attachments          []composeAttachment         `json:"attachments,omitempty"`
+	SubmissionKey        string                      `json:"submission_key,omitempty"`
 	SecurityEncrypted    bool                        `json:"pgp_encrypted,omitempty"`
 	SecuritySigned       bool                        `json:"pgp_signed,omitempty"`
 	SecurityMIME         bool                        `json:"pgp_mime,omitempty"`
@@ -326,6 +335,7 @@ func New(opts Options) (*Server, error) {
 		snoozePushRunning:         map[int64]bool{},
 		snoozePushDirty:           map[int64]bool{},
 		snoozeSchedulerWake:       make(chan struct{}, 1),
+		outboxWake:                make(chan struct{}, 1),
 		backgroundCtx:             backgroundCtx,
 		backgroundCancel:          backgroundCancel,
 		readStatePushes:           newReadStatePushQueue(),
@@ -358,6 +368,7 @@ func New(opts Options) (*Server, error) {
 		srv.resumeNewMailWebPushAsync()
 		srv.resumeSnoozeReminderWebPushAsync()
 		srv.startSnoozeScheduler()
+		srv.startOutboxWorker()
 	}
 	return srv, nil
 }
@@ -404,6 +415,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/search", s.handleApp)
 	mux.HandleFunc("/search/", s.handleApp)
 	mux.HandleFunc("/compose", s.handleApp)
+	mux.HandleFunc("/outbox", s.handleApp)
 	mux.HandleFunc("/contacts", s.handleApp)
 	mux.HandleFunc("/contacts/", s.handleContactOrApp)
 	mux.HandleFunc("/webhooks/sync", s.handleSyncWebhook)

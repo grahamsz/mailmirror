@@ -110,17 +110,17 @@ func TestSearchProgressMigrationAddsPartialCoveringIndex(t *testing.T) {
 	}
 }
 
-func TestUser028IsLatestRegisteredUserMigration(t *testing.T) {
+func TestUser029IsLatestRegisteredUserMigration(t *testing.T) {
 	sets := currentUserMigrationSetsForUpgradeTest()
 	if len(sets) < 2 {
 		t.Fatalf("registered user migrations=%d, want at least 2", len(sets))
 	}
 	latest := sets[len(sets)-1]
 	predecessor := sets[len(sets)-2]
-	if latest.Version != UserSchemaVersion028 {
-		t.Fatalf("latest user migration=%q, want %q", latest.Version, UserSchemaVersion028)
+	if latest.Version != UserSchemaVersion029 {
+		t.Fatalf("latest user migration=%q, want %q", latest.Version, UserSchemaVersion029)
 	}
-	if predecessor.Version != UserSchemaVersion027 {
-		t.Fatalf("user-028 predecessor=%q, want %q", predecessor.Version, UserSchemaVersion027)
+	if predecessor.Version != UserSchemaVersion028 {
+		t.Fatalf("user-029 predecessor=%q, want %q", predecessor.Version, UserSchemaVersion028)
 	}
 }

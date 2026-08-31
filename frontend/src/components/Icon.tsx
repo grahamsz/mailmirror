@@ -44,12 +44,14 @@ import {
   LockOpen,
   MagnifyingGlass,
   Mailbox as MailboxIcon,
+  MapPin,
   Minus,
   Newspaper,
   NotePencil,
   Paperclip,
   PaperPlaneTilt,
   PencilSimple,
+  Phone,
   Plus,
   Quotes,
   Receipt,
@@ -65,6 +67,7 @@ import {
   TextAa,
   Trash,
   Tray,
+  UploadSimple,
   Users,
   X
 } from "@phosphor-icons/react";
@@ -112,6 +115,7 @@ const iconMap: Record<string, PhosphorIcon> = {
   key: Key,
   label: Tag,
   link: LinkSimple,
+  location: MapPin,
   lock: Lock,
   lock_open: LockOpen,
   logout: SignOut,
@@ -124,6 +128,7 @@ const iconMap: Record<string, PhosphorIcon> = {
   more_vert: DotsThreeVertical,
   newspaper: Newspaper,
   notifications: Bell,
+  phone: Phone,
   receipt: Receipt,
   report: SealWarning,
   reply: ArrowBendUpLeft,
@@ -139,7 +144,8 @@ const iconMap: Record<string, PhosphorIcon> = {
   signature: Signature,
   star: Star,
   sync: ArrowsClockwise,
-  travel: AirplaneTilt
+  travel: AirplaneTilt,
+  upload: UploadSimple
 };
 
 const iconAliases: Record<string, string> = {

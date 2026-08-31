@@ -1963,6 +1963,7 @@ function MessageList({
               <strong>
                 <HighlightedText text={msg.subject || "(no subject)"} query={searchQuery} terms={matchTerms} />
               </strong>
+              {msg.outbox_id ? <span className={`message-outbox-pill ${outboxMessageTone(msg.delivery_state, msg.filing_state)}`}>{outboxMessageLabel(msg.delivery_state, msg.filing_state)}</span> : null}
               {securityIndicators}
               {annotationNodes}
               <span className={`snippet ${securitySnippetClass}`}>
@@ -1993,4 +1994,22 @@ function MessageList({
       })}
     </div>
   );
+}
+
+function outboxMessageLabel(delivery = "", filing = ""): string {
+  if (delivery === "delivery_unknown") return "Delivery uncertain";
+  if (delivery === "failed") return "Send failed";
+  if (delivery === "canceled") return "Canceled";
+  if (delivery === "accepted" && filing === "complete") return "Sent";
+  if (delivery === "accepted") return filing === "needs_attention" ? "Sent · copy issue" : "Sent · saving copy";
+  if (delivery === "retry_wait") return "Retrying";
+  if (delivery === "smtp_in_flight") return "Sending…";
+  return "Queued";
+}
+
+function outboxMessageTone(delivery = "", filing = ""): string {
+  if (delivery === "delivery_unknown" || delivery === "failed") return "danger";
+  if (filing === "needs_attention" || delivery === "retry_wait") return "warning";
+  if (delivery === "accepted" && filing === "complete") return "complete";
+  return "active";
 }

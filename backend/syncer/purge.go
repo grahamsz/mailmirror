@@ -141,6 +141,13 @@ func (s *Service) PurgeAccountLocalDataWithProgress(ctx context.Context, userID 
 	if err != nil {
 		return 0, err
 	}
+	outboxBlobs, outboxMessageIDs, err := s.Store.PurgeOutboxJobsForIMAPAccount(ctx, userID, account.ID)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.cleanupPurgedBlobRecords(ctx, userID, outboxBlobs); err != nil {
+		return 0, err
+	}
 	searchTotal := 0
 	if s.Search != nil {
 		for _, mailbox := range mailboxes {
@@ -157,12 +164,13 @@ func (s *Service) PurgeAccountLocalDataWithProgress(ctx context.Context, userID 
 		progress.CurrentMailbox = accountPurgeLabel(account)
 		progress.LatestNewFrom = "rolltop:maintenance"
 		progress.LatestNewSubject = "Deleting local IMAP account data"
+		progress.MessagesSeen += len(outboxMessageIDs)
 		if err := s.updateSyncProgress(ctx, userID, runID, *progress); err != nil {
 			return 0, err
 		}
 	}
 
-	purged := 0
+	purged := len(outboxMessageIDs)
 	const purgeBatchSize = 100
 	for {
 		refs, n, err := s.Store.PurgeAccountMessageBatch(ctx, userID, account.ID, purgeBatchSize)

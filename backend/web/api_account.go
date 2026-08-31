@@ -715,6 +715,30 @@ func (s *Server) apiDeleteSMTPAccount(w http.ResponseWriter, r *http.Request, ac
 	if !s.verifyCSRF(w, r) {
 		return
 	}
+	outboxBlobs, messageIDs, err := s.store.PurgeOutboxJobsForSMTPAccount(r.Context(), cu.User.ID, accountID)
+	if err != nil {
+		if errors.Is(err, store.ErrOutboxBusy) {
+			writeAPIError(w, http.StatusConflict, "A message is using this SMTP account right now. Wait for the current delivery attempt to finish.")
+			return
+		}
+		s.serverError(w, err)
+		return
+	}
+	for _, messageID := range messageIDs {
+		if s.search != nil {
+			_ = s.search.DeleteMessage(r.Context(), cu.User.ID, messageID)
+		}
+	}
+	for _, blobRecord := range outboxBlobs {
+		deleted, cleanupErr := s.store.DeleteBlobIfUnreferencedForUser(r.Context(), cu.User.ID, blobRecord.ID)
+		if cleanupErr != nil {
+			s.serverError(w, cleanupErr)
+			return
+		}
+		if deleted && s.blobs != nil {
+			_ = s.blobs.DeleteUserBlob(cu.User.ID, blobRecord.Path)
+		}
+	}
 	if err := s.store.DeleteSMTPAccountForUser(r.Context(), cu.User.ID, accountID); err != nil {
 		if store.IsNotFound(err) {
 			http.NotFound(w, r)
@@ -724,6 +748,7 @@ func (s *Server) apiDeleteSMTPAccount(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 	s.clearComposeIdentityCache(cu.User.ID)
+	s.notifyOutboxChanged(cu.User.ID)
 	writeJSON(w, map[string]any{"ok": true})
 }
 

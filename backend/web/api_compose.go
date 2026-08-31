@@ -50,13 +50,22 @@ func (s *Server) apiCompose(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		sent, err := s.sendCompose(r.Context(), cu, form)
+		job, sent, err := s.queueCompose(r.Context(), cu, form)
 		if err != nil {
 			writeAPIError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		s.notifyUserChanged(cu.User.ID)
-		writeJSON(w, map[string]any{"ok": true, "message_id": sent.ID})
+		s.notifyOutboxChanged(cu.User.ID)
+		s.wakeOutboxWorker()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, map[string]any{
+			"ok":         true,
+			"queued":     true,
+			"send_id":    job.ID,
+			"message_id": sent.ID,
+			"status":     job.DeliveryState,
+		})
 	default:
 		methodNotAllowed(w)
 	}

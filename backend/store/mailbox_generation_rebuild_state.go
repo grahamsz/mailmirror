@@ -62,6 +62,7 @@ func snapshotMailboxGenerationStateTx(ctx context.Context, tx *sql.Tx, userID, a
 		LEFT JOIN pending_inbox_arrivals arrival ON arrival.user_id = message.user_id
 			AND arrival.message_id = message.id AND arrival.classification = 'pending'
 		WHERE message.user_id = ? AND message.account_id = ? AND message.mailbox_id = ?
+		AND message.outbox_job_id = 0
 		AND (message.read_sync_pending <> 0 OR message.star_sync_pending <> 0
 			OR snooze.id IS NOT NULL OR event.id IS NOT NULL OR arrival.id IS NOT NULL
 			OR EXISTS (SELECT 1 FROM snooze_reminder_events reminder

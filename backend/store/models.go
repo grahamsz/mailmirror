@@ -209,6 +209,64 @@ type MessageRecord struct {
 	UpdatedAt           time.Time
 }
 
+// OutboxJob is one durable, user-owned outbound message. SMTP delivery and
+// remote Sent-folder filing are intentionally tracked independently so a
+// filing failure can never cause an accepted message to be transmitted again.
+type OutboxJob struct {
+	ID                  int64
+	UserID              int64
+	SubmissionKey       string
+	SMTPAccountID       int64
+	IMAPAccountID       int64
+	SentMailboxID       int64
+	OptimisticMessageID int64
+	EnvelopeFrom        string
+	RecipientsJSON      string
+	MessageIDHeader     string
+	BlobID              int64
+	BlobPath            string
+	RawSHA256           string
+	RawSize             int64
+	DeliveryState       string
+	FilingState         string
+	AttemptCount        int
+	FilingAttemptCount  int
+	NextAttemptAt       time.Time
+	LeaseOwner          string
+	LeaseExpiresAt      time.Time
+	AppendUIDValidity   uint32
+	AppendUIDNext       uint32
+	AppendedUID         uint32
+	AppendedUIDValidity uint32
+	LastErrorKind       string
+	LastError           string
+	AttentionAt         time.Time
+	AcknowledgedAt      time.Time
+	SMTPAcceptedAt      time.Time
+	CompletedAt         time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+// OutboxSummary is the compact durable state included in bootstrap and SSE
+// responses. NeedsAttention is never inferred from a transient in-memory event.
+type OutboxSummary struct {
+	Active         int
+	NeedsAttention int
+	LatestID       int64
+}
+
+// OutboxMessageState decorates an optimistic Sent message without putting
+// queue mechanics into the canonical message row API.
+type OutboxMessageState struct {
+	OutboxID      int64
+	MessageID     int64
+	DeliveryState string
+	FilingState   string
+	LastError     string
+	Attention     bool
+}
+
 // MessageSimilarityCandidate is the minimal SQLite envelope needed to validate
 // and hydrate a Bleve similarity hit without loading stored message bodies.
 type MessageSimilarityCandidate struct {

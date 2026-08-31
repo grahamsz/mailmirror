@@ -35,6 +35,7 @@ export function AppShell({
   latestSyncRun,
   activeSyncRuns,
   syncRunning,
+  outbox,
   serverStartedAt,
   serverUptimeSeconds,
   buildVersion,
@@ -414,6 +415,7 @@ export function AppShell({
           latestSyncRun={latestSyncRun}
           activeSyncRuns={activeSyncRuns}
           syncRunning={syncRunning}
+          outbox={outbox}
           serverStartedAt={serverStartedAt}
           serverUptimeSeconds={serverUptimeSeconds}
           buildVersion={buildVersion}
@@ -764,6 +766,7 @@ function Sidebar({
   latestSyncRun,
   activeSyncRuns,
   syncRunning,
+  outbox,
   serverStartedAt,
   serverUptimeSeconds,
   buildVersion,
@@ -786,6 +789,7 @@ function Sidebar({
   latestSyncRun: SyncRun | null;
   activeSyncRuns: SyncRun[];
   syncRunning: boolean;
+  outbox: import("../../types").OutboxSummary;
   serverStartedAt: string;
   serverUptimeSeconds: number;
   buildVersion: string;
@@ -815,6 +819,7 @@ function Sidebar({
   const activeMailbox = mailRoute(currentPath).mailboxID;
   const allMailActive = (currentPath === "/mail" || currentPath.startsWith("/mail/")) && !activeMailbox;
   const snoozedActive = currentPath === "/snoozes";
+  const outboxActive = currentPath === "/outbox";
   const accountGroups = useMemo(() => sidebarAccountGroups(mailboxes), [mailboxes]);
   const advertiseAndroidApp = shouldAdvertiseAndroidApp();
 
@@ -991,6 +996,18 @@ function Sidebar({
           onClick={(event) => open(event, "/mail")}
         >
           <span className="folder-name"><Icon name="mail" weight={allMailActive ? "bold" : undefined} />All Mail</span>
+        </a>
+        <a
+          href="/outbox"
+          className={`folder ${outboxActive ? "active" : ""} ${outbox.needs_attention > 0 ? "outbox-attention" : ""}`}
+          onClick={(event) => open(event, "/outbox")}
+        >
+          <span className="folder-name"><Icon name="send" weight={outboxActive ? "bold" : undefined} />Outbox</span>
+          {outbox.needs_attention > 0 ? (
+            <span className="folder-count outbox-attention-count" title="Queued messages need attention">{outbox.needs_attention.toLocaleString()}</span>
+          ) : outbox.active > 0 ? (
+            <span className="folder-count">{outbox.active.toLocaleString()}</span>
+          ) : null}
         </a>
     <a
       href="/snoozes"

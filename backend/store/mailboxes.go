@@ -265,7 +265,9 @@ func (s *Store) GetOrCreateMailboxWithRole(ctx context.Context, userID, accountI
 // NextUIDForMailbox returns the next UID that should be fetched after the mailbox's last stored UID.
 func (s *Store) NextUIDForMailbox(ctx context.Context, userID, mailboxID int64) (uint32, error) {
 	var next uint32
-	err := s.mustDataDB(ctx, userID).QueryRowContext(ctx, `SELECT COALESCE(MAX(uid), 0) + 1 FROM messages WHERE user_id = ? AND mailbox_id = ?`, userID, mailboxID).Scan(&next)
+	err := s.mustDataDB(ctx, userID).QueryRowContext(ctx, `SELECT COALESCE(MAX(uid), 0) + 1
+		FROM messages WHERE user_id = ? AND mailbox_id = ? AND outbox_job_id = 0`,
+		userID, mailboxID).Scan(&next)
 	if next == 0 {
 		next = 1
 	}
@@ -845,7 +847,8 @@ func (s *Store) mailboxGenerationScopeError(ctx context.Context, db *sql.DB, use
 // MessageUIDsForMailbox returns the local UID set for one user-owned account mailbox.
 func (s *Store) MessageUIDsForMailbox(ctx context.Context, userID, accountID, mailboxID int64) ([]uint32, error) {
 	rows, err := s.mustDataDB(ctx, userID).QueryContext(ctx, `SELECT uid FROM messages
-		WHERE user_id = ? AND account_id = ? AND mailbox_id = ? AND import_completed_at > 0 ORDER BY uid`,
+		WHERE user_id = ? AND account_id = ? AND mailbox_id = ?
+			AND import_completed_at > 0 AND outbox_job_id = 0 ORDER BY uid`,
 		userID, accountID, mailboxID)
 	if err != nil {
 		return nil, err

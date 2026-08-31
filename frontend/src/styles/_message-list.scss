@@ -197,6 +197,33 @@
 
 }
 
+.message-outbox-pill {
+  display: inline-flex;
+  margin-left: 7px;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-warm) 42%, var(--border));
+  border-radius: 999px;
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 800;
+  vertical-align: 1px;
+  white-space: nowrap;
+
+  &.danger {
+    border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+    color: var(--danger);
+  }
+
+  &.warning {
+    color: var(--warning, #a85d24);
+  }
+
+  &.complete {
+    border-color: var(--border);
+    color: var(--muted);
+  }
+}
+
 .message-swipe-shell {
   --swipe-action-content-opacity: 0;
   --swipe-action-icon-scale: .76;

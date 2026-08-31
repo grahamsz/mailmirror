@@ -2,7 +2,7 @@
 // types so navigation, toasts, and shell callbacks do not leak into backend contracts.
 
 import type { ReactNode } from "react";
-import type { Bootstrap, Mailbox, User } from "./types";
+import type { Bootstrap, Mailbox, OutboxSummary, User } from "./types";
 
 /** LocationState is the minimal browser URL state App passes through the manual router. */
 export type LocationState = {
@@ -75,6 +75,7 @@ export type AppShellProps = {
   latestSyncRun: import("./types").SyncRun | null;
   activeSyncRuns: import("./types").SyncRun[];
   syncRunning: boolean;
+  outbox: OutboxSummary;
   accountNeedsPassword: boolean;
   accountNotice: string;
   enabledPlugins: string[];

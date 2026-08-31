@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -15,6 +16,115 @@ import (
 	"rolltop/backend/buildinfo"
 	"rolltop/backend/store"
 )
+
+func TestSendRawClassifiesTemporaryEnvelopeFailureAsSafeToRetry(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverDone := make(chan error, 1)
+	go func() {
+		defer serverConn.Close()
+		_ = serverConn.SetDeadline(time.Now().Add(2 * time.Second))
+		serverDone <- serveSMTPUntilRCPT(serverConn, "451 4.3.0 try again later\r\n")
+	}()
+	err := sendRawOnConn(context.Background(), store.MailAccount{
+		Email: "sender@example.test", SMTPHost: "smtp.example.test",
+	}, "", []string{"recipient@example.test"}, []byte("Subject: retry\r\n\r\nbody\r\n"), clientConn)
+	var deliveryErr *DeliveryError
+	if !errors.As(err, &deliveryErr) {
+		t.Fatalf("send error=%v, want DeliveryError", err)
+	}
+	if deliveryErr.Phase != DeliveryPhaseEnvelope || deliveryErr.Outcome != DeliveryNotAccepted || !deliveryErr.Temporary {
+		t.Fatalf("delivery error=%+v, want temporary envelope/not-accepted", deliveryErr)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSendRawClassifiesLostFinalDataResponseAsUncertain(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverDone := make(chan error, 1)
+	go func() {
+		defer serverConn.Close()
+		_ = serverConn.SetDeadline(time.Now().Add(2 * time.Second))
+		serverDone <- serveSMTPAndDropFinalAcceptance(serverConn)
+	}()
+	err := sendRawOnConn(context.Background(), store.MailAccount{
+		Email: "sender@example.test", SMTPHost: "smtp.example.test",
+	}, "", []string{"recipient@example.test"}, []byte("Subject: uncertain\r\n\r\nbody\r\n"), clientConn)
+	var deliveryErr *DeliveryError
+	if !errors.As(err, &deliveryErr) {
+		t.Fatalf("send error=%v, want DeliveryError", err)
+	}
+	if deliveryErr.Phase != DeliveryPhaseAccept || deliveryErr.Outcome != DeliveryUnknown {
+		t.Fatalf("delivery error=%+v, want accept/unknown", deliveryErr)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func serveSMTPUntilRCPT(conn net.Conn, rcptResponse string) error {
+	reader := bufio.NewReader(conn)
+	if _, err := fmt.Fprint(conn, "220 smtp.example.test ready\r\n"); err != nil {
+		return err
+	}
+	for _, exchange := range []struct {
+		prefix   string
+		response string
+	}{
+		{"EHLO ", "250 smtp.example.test\r\n"},
+		{"MAIL FROM:", "250 sender ok\r\n"},
+		{"RCPT TO:", rcptResponse},
+	} {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(strings.ToUpper(line), exchange.prefix) {
+			return fmt.Errorf("SMTP command=%q, want prefix %q", line, exchange.prefix)
+		}
+		if _, err := fmt.Fprint(conn, exchange.response); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func serveSMTPAndDropFinalAcceptance(conn net.Conn) error {
+	reader := bufio.NewReader(conn)
+	if _, err := fmt.Fprint(conn, "220 smtp.example.test ready\r\n"); err != nil {
+		return err
+	}
+	for _, exchange := range []struct {
+		prefix   string
+		response string
+	}{
+		{"EHLO ", "250 smtp.example.test\r\n"},
+		{"MAIL FROM:", "250 sender ok\r\n"},
+		{"RCPT TO:", "250 recipient ok\r\n"},
+		{"DATA", "354 send message\r\n"},
+	} {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(strings.ToUpper(line), exchange.prefix) {
+			return fmt.Errorf("SMTP command=%q, want prefix %q", line, exchange.prefix)
+		}
+		if _, err := fmt.Fprint(conn, exchange.response); err != nil {
+			return err
+		}
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if line == ".\r\n" {
+			return nil
+		}
+	}
+}
 
 func TestSMTPIdleDeadlineConnBoundsBlockedIO(t *testing.T) {
 	for _, test := range []struct {

@@ -57,6 +57,11 @@ func (s *Server) bootstrapPayload(w http.ResponseWriter, r *http.Request) (map[s
 		resp["active_sync_runs"] = apiSyncRuns(chrome.ActiveSyncRuns)
 		resp["sync_running"] = chrome.SyncRunning
 		resp["mail_generation"] = s.mailListGeneration(cu.User.ID)
+		outboxSummary, err := s.store.OutboxSummaryForUser(r.Context(), cu.User.ID)
+		if err != nil {
+			return nil, err
+		}
+		resp["outbox"] = apiOutboxSummary(outboxSummary)
 		needsPassword, notice := s.accountCredentialNotice(r.Context(), cu.User.ID)
 		resp["account_needs_password"] = needsPassword
 		resp["account_notice"] = notice
@@ -76,6 +81,7 @@ func (s *Server) bootstrapPayload(w http.ResponseWriter, r *http.Request) (map[s
 		resp["account_needs_password"] = false
 		resp["account_notice"] = ""
 		resp["enabled_plugins"] = []string{}
+		resp["outbox"] = apiOutboxSummary(store.OutboxSummary{})
 	}
 	return resp, nil
 }

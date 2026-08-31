@@ -238,6 +238,7 @@ export default function App() {
   const toastTimers = useRef<Map<number, number>>(new Map());
   const pendingToastUndos = useRef<Map<number, ToastUndo>>(new Map());
   const lastNotify = useRef<{ id: number; stored: number } | null>(null);
+  const lastOutboxAttention = useRef(bootstrap?.outbox?.needs_attention || 0);
   const lastMouseActivityAt = useRef(Date.now());
   const lastAllMailWakePrefetchAt = useRef(0);
   const [notificationsEnabled, setNotificationsEnabled] = useState(initialNotificationsEnabled);
@@ -400,6 +401,7 @@ export default function App() {
     if (activeUserIDRef.current === userID) return;
     const previousUserID = activeUserIDRef.current;
     activeUserIDRef.current = userID;
+    lastOutboxAttention.current = bootstrap?.outbox?.needs_attention || 0;
     securityUnlockRef.current = emptySecurityUnlockState;
     setSecurityUnlock(emptySecurityUnlockState);
     setSecurityUnlockOpen(false);
@@ -752,6 +754,7 @@ export default function App() {
           build_label: chrome.build_label || current.build_label,
           build_commit: chrome.build_commit ?? current.build_commit,
           public_site_url: chrome.public_site_url || current.public_site_url,
+          outbox: chrome.outbox || current.outbox,
           mail_generation: chrome.mail_generation ?? current.mail_generation,
           swipe_preferences: chrome.swipe_preferences || current.swipe_preferences
         } : current);
@@ -765,6 +768,26 @@ export default function App() {
           }
           lastNotify.current = { id: chrome.latest_sync_run.id, stored: newMessages };
         }
+        if (chrome.outbox) {
+          if (chrome.outbox.needs_attention > lastOutboxAttention.current) {
+            addToast("A queued message needs attention. Open Outbox for details.", "error");
+            if (notificationsEnabled && document.visibilityState !== "visible" && "Notification" in window && Notification.permission === "granted") {
+              const notification = new Notification("A message needs attention", {
+                body: "Delivery or Sent-folder confirmation needs attention. Open Outbox for details.",
+                tag: "rolltop-outbox-attention",
+                icon: notificationIconURL,
+                badge: notificationIconURL,
+                data: { url: "/outbox" }
+              });
+              notification.onclick = () => {
+                notification.close();
+                window.focus();
+                navigate("/outbox");
+              };
+            }
+          }
+          lastOutboxAttention.current = chrome.outbox.needs_attention;
+        }
       } catch {
         // Cached/offline views should stay usable if an event is malformed or missed.
       }
@@ -772,7 +795,7 @@ export default function App() {
     return () => {
       events.close();
     };
-  }, [bootstrap?.user, notifyNewMail, connectionTick]);
+  }, [addToast, bootstrap?.user, connectionTick, navigate, notificationsEnabled, notifyNewMail]);
 
   // Folder drag/drop hides rows optimistically only for moves. Ctrl/Cmd-drag
   // copies messages to the destination and leaves the source list untouched.
@@ -894,6 +917,7 @@ export default function App() {
         latestSyncRun={bootstrap.latest_sync_run || null}
         activeSyncRuns={bootstrap.active_sync_runs || []}
         syncRunning={Boolean(bootstrap.sync_running)}
+        outbox={bootstrap.outbox || { active: 0, needs_attention: 0, latest_id: 0 }}
         accountNeedsPassword={Boolean(bootstrap.account_needs_password)}
         accountNotice={bootstrap.account_notice || ""}
         enabledPlugins={bootstrap.enabled_plugins || []}
@@ -923,6 +947,7 @@ export default function App() {
           latestSyncRun={bootstrap.latest_sync_run || null}
           activeSyncRuns={bootstrap.active_sync_runs || []}
           syncRunning={Boolean(bootstrap.sync_running)}
+          outbox={bootstrap.outbox || { active: 0, needs_attention: 0, latest_id: 0 }}
           mailGeneration={bootstrap.mail_generation || 0}
           swipePreferences={bootstrap.swipe_preferences || defaultSwipePreferences()}
           enabledPlugins={bootstrap.enabled_plugins || []}

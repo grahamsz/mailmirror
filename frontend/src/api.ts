@@ -7,6 +7,7 @@ import type {
   Bootstrap,
   Contact,
   ContactAutocomplete,
+  ContactInteraction,
   ComposeAttachmentUpload,
   ComposeForm,
   ComposeIdentity,
@@ -17,6 +18,7 @@ import type {
   MailIdentity,
   MessageSnooze,
   MessageOriginalSource,
+  OutboxResponse,
   PluginSetting,
   SMTPAccount,
   SearchExplanation,
@@ -384,7 +386,7 @@ export const api = {
   send: (csrf: string, form: ComposeForm, attachments: ComposeAttachmentUpload[] = []) => {
     const payload = composeSendPayload(form);
     if (attachments.length === 0) {
-      return postJSON<{ ok: boolean; message_id: number }>("/api/compose", csrf, payload);
+      return postJSON<{ ok: boolean; queued: boolean; send_id: number; message_id: number; status: string }>("/api/compose", csrf, payload);
     }
     const body = new FormData();
     body.append("payload", JSON.stringify({
@@ -399,8 +401,15 @@ export const api = {
       }))
     }));
     attachments.forEach((attachment) => body.append(attachment.field, attachment.file, attachment.filename));
-    return postForm<{ ok: boolean; message_id: number }>("/api/compose", csrf, body);
+    return postForm<{ ok: boolean; queued: boolean; send_id: number; message_id: number; status: string }>("/api/compose", csrf, body);
   },
+  outbox: () => getJSON<OutboxResponse>("/api/outbox"),
+  acknowledgeOutbox: (csrf: string, id: number) =>
+    postJSON<{ ok: boolean }>(`/api/outbox/${id}/acknowledge`, csrf, {}),
+  cancelOutbox: (csrf: string, id: number) =>
+    postJSON<{ ok: boolean }>(`/api/outbox/${id}/cancel`, csrf, {}),
+  retryOutbox: (csrf: string, id: number, retryAnyway = false) =>
+    postJSON<{ ok: boolean }>(`/api/outbox/${id}/retry`, csrf, { retry_anyway: retryAnyway }),
   saveDraft: (csrf: string, form: ComposeForm, attachments: ComposeAttachmentUpload[] = []) => {
     const payload = composeSendPayload(form);
     if (attachments.length === 0) {
@@ -425,6 +434,8 @@ export const api = {
     const q = query.trim() ? `?${new URLSearchParams({ q: query.trim() })}` : "";
     return getJSON<{ contacts: Contact[] }>(`/api/contacts${q}`);
   },
+  contactInteractions: (id: number) =>
+    getJSON<{ interactions: ContactInteraction[] }>(`/api/contacts/${id}/interactions`),
   contactAutocomplete: (query: string) =>
     getJSON<{ contacts: ContactAutocomplete[] }>(`/api/contacts/autocomplete?${new URLSearchParams({ q: query })}`),
   createContact: (csrf: string, contact: Contact) => postJSON<{ contact: Contact }>("/api/contacts", csrf, contact),

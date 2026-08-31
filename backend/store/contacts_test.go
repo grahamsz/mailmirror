@@ -6,6 +6,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestContactsAreScopedByUser(t *testing.T) {
@@ -77,6 +78,61 @@ func TestContactAutocompleteIncludesOnlyCurrentUsersRecentCorrespondents(t *test
 	}
 	if len(items) != 1 || items[0].Email != "alice@example.test" || items[0].Label != "Recent" {
 		t.Fatalf("recent autocomplete = %+v", items)
+	}
+}
+
+func TestContactInteractionsAreExactAndScopedByUser(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(filepath.Join(t.TempDir(), "rolltop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	user, err := db.CreateUser(ctx, "interaction-owner@example.test", "Owner", "hash", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := db.CreateUser(ctx, "interaction-other@example.test", "Other", "hash", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contact, err := db.CreateContact(ctx, user.ID, Contact{
+		DisplayName: "Alice",
+		Emails:      []ContactEmail{{Email: "alice@example.test", IsPrimary: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := createNewMailEventMessage(t, ctx, db, user, 11, "Alice <alice@example.test>", "Received note")
+	sent := createNewMailEventMessage(t, ctx, db, user, 12, "Owner <interaction-owner@example.test>", "Sent note")
+	createNewMailEventMessage(t, ctx, db, user, 13, "Not Alice <notalice@example.test>", "Substring should not match")
+	createNewMailEventMessage(t, ctx, db, other, 21, "Alice <alice@example.test>", "Other tenant")
+	now := time.Now().UTC()
+	if _, err := db.mustDataDB(ctx, user.ID).ExecContext(ctx, `UPDATE messages
+		SET from_addr = ?, to_addr = ?, date_unix = ? WHERE user_id = ? AND id = ?`,
+		"Owner <interaction-owner@example.test>", "Alice <alice@example.test>", now.Unix(), user.ID, sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.mustDataDB(ctx, user.ID).ExecContext(ctx, `UPDATE messages
+		SET date_unix = ? WHERE user_id = ? AND id = ?`, now.Add(-time.Hour).Unix(), user.ID, received.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := db.ListContactInteractionsForUser(ctx, user.ID, contact.ID, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("interactions = %+v, want sent and received only", items)
+	}
+	if items[0].MessageID != sent.ID || items[0].Direction != "sent" {
+		t.Fatalf("first interaction = %+v, want newest sent message", items[0])
+	}
+	if items[1].MessageID != received.ID || items[1].Direction != "received" {
+		t.Fatalf("second interaction = %+v, want received message", items[1])
+	}
+	if _, err := db.ListContactInteractionsForUser(ctx, other.ID, contact.ID, 6); !IsNotFound(err) {
+		t.Fatalf("other user contact lookup err = %v, want not found", err)
 	}
 }
 

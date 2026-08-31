@@ -125,6 +125,11 @@ type apiMessage struct {
 	HasAttachments bool                   `json:"has_attachments"`
 	IsEncrypted    bool                   `json:"is_encrypted"`
 	IsSigned       bool                   `json:"is_signed"`
+	OutboxID       int64                  `json:"outbox_id,omitempty"`
+	DeliveryState  string                 `json:"delivery_state,omitempty"`
+	FilingState    string                 `json:"filing_state,omitempty"`
+	DeliveryError  string                 `json:"delivery_error,omitempty"`
+	NeedsAttention bool                   `json:"needs_attention,omitempty"`
 	Snippet        string                 `json:"snippet"`
 	Annotations    []apiMessageAnnotation `json:"annotations,omitempty"`
 }
@@ -254,6 +259,15 @@ type apiContactAutocomplete struct {
 	Email     string `json:"email"`
 	Label     string `json:"label"`
 	IconURL   string `json:"icon_url"`
+}
+
+type apiContactInteraction struct {
+	MessageID      int64  `json:"message_id"`
+	Subject        string `json:"subject"`
+	FromAddr       string `json:"from_addr"`
+	Date           string `json:"date"`
+	Direction      string `json:"direction"`
+	HasAttachments bool   `json:"has_attachments"`
 }
 
 type apiComposeIdentity struct {

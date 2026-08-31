@@ -111,6 +111,10 @@ func (s *Store) DeleteBlobIfUnreferencedForUser(ctx context.Context, userID, id 
 			AND NOT EXISTS (
 				SELECT 1 FROM remote_image_cache
 				WHERE remote_image_cache.user_id = blobs.user_id AND remote_image_cache.blob_id = blobs.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM outbox_jobs
+				WHERE outbox_jobs.user_id = blobs.user_id AND outbox_jobs.blob_id = blobs.id
 			)`, userID, id)
 	if err != nil {
 		return false, err

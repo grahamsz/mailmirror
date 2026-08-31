@@ -132,14 +132,14 @@ func (s *Store) StageMessageTransfer(ctx context.Context, userID, sourceMessageI
 		return MessageTransfer{}, err
 	}
 	defer tx.Rollback()
-	var sourceAccountID, sourceMailboxID, destinationAccountID, sourceMailboxUIDValidity int64
+	var sourceAccountID, sourceMailboxID, destinationAccountID, sourceMailboxUIDValidity, outboxJobID int64
 	var sourceUID uint32
 	var sourceUIDValidity int64
 	var rawSHA, storedCanonical, messageID, storedMessageIDHash string
 	var internalDate, size int64
 	err = tx.QueryRowContext(ctx, `SELECT source.account_id, source.mailbox_id, source.uid,
 		blob.sha256, source.canonical_sha256, source.message_id_header, source.message_id_hash,
-		source.internal_date_unix, source.size, source.uid_validity, destination.account_id,
+		source.internal_date_unix, source.size, source.uid_validity, source.outbox_job_id, destination.account_id,
 		source_mailbox.uidvalidity
 		FROM messages source
 		JOIN blobs blob ON blob.user_id = source.user_id AND blob.id = source.blob_id
@@ -147,10 +147,13 @@ func (s *Store) StageMessageTransfer(ctx context.Context, userID, sourceMessageI
 		JOIN mailboxes source_mailbox ON source_mailbox.user_id = source.user_id AND source_mailbox.id = source.mailbox_id
 		WHERE source.user_id = ? AND source.id = ?`, destinationMailboxID, userID, sourceMessageID).
 		Scan(&sourceAccountID, &sourceMailboxID, &sourceUID, &rawSHA, &storedCanonical,
-			&messageID, &storedMessageIDHash, &internalDate, &size, &sourceUIDValidity, &destinationAccountID,
+			&messageID, &storedMessageIDHash, &internalDate, &size, &sourceUIDValidity, &outboxJobID, &destinationAccountID,
 			&sourceMailboxUIDValidity)
 	if err != nil {
 		return MessageTransfer{}, err
+	}
+	if outboxJobID > 0 {
+		return MessageTransfer{}, errors.New("message is still being delivered; wait for its Sent copy to be confirmed")
 	}
 	if kind == "move" && sourceAccountID != destinationAccountID {
 		return MessageTransfer{}, errors.New("message move accounts do not match")

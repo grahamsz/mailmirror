@@ -99,6 +99,10 @@ func (s *Server) syncEventPayload(ctx context.Context, userID int64) (map[string
 		return nil, err
 	}
 	info := buildinfo.Current()
+	outboxSummary, err := s.store.OutboxSummaryForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"mailboxes":             apiMailboxes(data.Mailboxes),
 		"latest_sync_run":       apiSyncRunPtr(data.LatestSyncRun),
@@ -114,6 +118,7 @@ func (s *Server) syncEventPayload(ctx context.Context, userID int64) (map[string
 		"build_commit":          info.Commit,
 		"public_site_url":       info.PublicSiteURL,
 		"storage_retained":      true,
+		"outbox":                apiOutboxSummary(outboxSummary),
 	}, nil
 }
 func (s *Server) apiStorage(w http.ResponseWriter, r *http.Request) {

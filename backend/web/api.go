@@ -37,6 +37,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiCompose(w, r)
 	case path == "compose/draft":
 		s.apiComposeDraft(w, r)
+	case path == "outbox":
+		s.apiOutbox(w, r)
+	case strings.HasPrefix(path, "outbox/"):
+		s.apiOutboxPath(w, r, strings.TrimPrefix(path, "outbox/"))
 	case path == "sync/status":
 		s.apiSyncStatus(w, r)
 	case path == "events":

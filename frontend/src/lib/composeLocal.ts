@@ -11,6 +11,7 @@ const maxTemplates = 20;
 const maxTemplateBytes = 800_000;
 
 export type LocalComposeContent = {
+  submissionKey: string;
   to: string;
   cc: string;
   bcc: string;
@@ -43,6 +44,7 @@ export function loadComposeRecovery(userID: number, context: string): LocalCompo
     return {
       version: recoveryVersion,
       updatedAt: Number(parsed.updatedAt),
+      submissionKey: safeString(parsed.submissionKey).slice(0, 160),
       to: safeString(parsed.to).slice(0, maxRecipientLength),
       cc: safeString(parsed.cc).slice(0, maxRecipientLength),
       bcc: safeString(parsed.bcc).slice(0, maxRecipientLength),
@@ -61,6 +63,7 @@ export function saveComposeRecovery(userID: number, context: string, content: Lo
   const recovery: LocalComposeRecovery = {
     version: recoveryVersion,
     updatedAt: Date.now(),
+    submissionKey: content.submissionKey.slice(0, 160),
     to: content.to.slice(0, maxRecipientLength),
     cc: content.cc.slice(0, maxRecipientLength),
     bcc: content.bcc.slice(0, maxRecipientLength),
@@ -95,7 +98,8 @@ export function clearComposeRecovery(userID: number, context: string) {
 }
 
 export function composeContentEqual(left: LocalComposeContent, right: LocalComposeContent): boolean {
-  return left.to === right.to && left.cc === right.cc && left.bcc === right.bcc &&
+  return left.submissionKey === right.submissionKey &&
+    left.to === right.to && left.cc === right.cc && left.bcc === right.bcc &&
     left.subject === right.subject && left.body === right.body && left.bodyHTML === right.bodyHTML &&
     left.fromIdentityID === right.fromIdentityID;
 }

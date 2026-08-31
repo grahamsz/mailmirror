@@ -358,10 +358,15 @@ func (s *Server) Close() error {
 	if s.backgroundCancel != nil {
 		s.backgroundCancel()
 	}
+	if s.outboxCancel != nil {
+		s.outboxCancel()
+		s.outboxCancel = nil
+	}
 	if s.ownedSyncRunnerCancel != nil {
 		s.ownedSyncRunnerCancel()
 		s.ownedSyncRunnerCancel = nil
 	}
+	s.outboxWG.Wait()
 	started := s.startedBackendPlugins
 	s.startedBackendPlugins = map[string]plugins.BackendPlugin{}
 

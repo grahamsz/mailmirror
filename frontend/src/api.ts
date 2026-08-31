@@ -73,6 +73,19 @@ const getInflight = new Map<string, Promise<unknown>>();
 const mailCacheEpochs = new Map<number, number>();
 type MutationRequestOptions = { keepalive?: boolean };
 
+async function mutationWithFreshCSRFRetry(request: (csrf: string) => Promise<Response>, csrf: string): Promise<Response> {
+  const initial = await request(csrf);
+  if (initial.status !== 403 || !/bad csrf token/i.test(await initial.clone().text())) return initial;
+
+  // Android can resume a WebView after its session state changed underneath a
+  // cached document. Refresh the token once before surfacing a write failure.
+  const bootstrap = await fetch("/api/bootstrap", { headers: { Accept: "application/json" } });
+  if (!bootstrap.ok) return initial;
+  const data = await bootstrap.json() as { csrf?: unknown };
+  if (typeof data.csrf !== "string" || !data.csrf) return initial;
+  return request(data.csrf);
+}
+
 async function fetchGET(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
@@ -118,74 +131,74 @@ export async function getJSON<T>(url: string, cacheKey = url): Promise<T> {
 /** POST JSON to a mutating endpoint with the current CSRF token. */
 export async function postJSON<T>(url: string, csrf: string, body: unknown = {}, options: MutationRequestOptions = {}): Promise<T> {
   return parse<T>(
-    await fetch(url, {
+    await mutationWithFreshCSRFRetry((token) => fetch(url, {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        "X-CSRF-Token": csrf
+        "X-CSRF-Token": token
       },
       body: JSON.stringify(body),
       ...(options.keepalive ? { keepalive: true } : {})
-    })
+    }), csrf)
   );
 }
 
 /** PUT JSON to a mutating endpoint with the current CSRF token. */
 export async function putJSON<T>(url: string, csrf: string, body: unknown = {}, options: MutationRequestOptions = {}): Promise<T> {
   return parse<T>(
-    await fetch(url, {
+    await mutationWithFreshCSRFRetry((token) => fetch(url, {
       method: "PUT",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        "X-CSRF-Token": csrf
+        "X-CSRF-Token": token
       },
       body: JSON.stringify(body),
       ...(options.keepalive ? { keepalive: true } : {})
-    })
+    }), csrf)
   );
 }
 
 /** DELETE JSON from a mutating endpoint with the current CSRF token. */
 export async function deleteJSON<T>(url: string, csrf: string): Promise<T> {
   return parse<T>(
-    await fetch(url, {
+    await mutationWithFreshCSRFRetry((token) => fetch(url, {
       method: "DELETE",
       headers: {
         Accept: "application/json",
-        "X-CSRF-Token": csrf
+        "X-CSRF-Token": token
       }
-    })
+    }), csrf)
   );
 }
 
 /** DELETE JSON with a request body for endpoints keyed by payload rather than path. */
 export async function deleteJSONBody<T>(url: string, csrf: string, body: unknown = {}): Promise<T> {
   return parse<T>(
-    await fetch(url, {
+    await mutationWithFreshCSRFRetry((token) => fetch(url, {
       method: "DELETE",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        "X-CSRF-Token": csrf
+        "X-CSRF-Token": token
       },
       body: JSON.stringify(body)
-    })
+    }), csrf)
   );
 }
 
 /** POST multipart form data without forcing a Content-Type boundary. */
 export async function postForm<T>(url: string, csrf: string, body: FormData): Promise<T> {
   return parse<T>(
-    await fetch(url, {
+    await mutationWithFreshCSRFRetry((token) => fetch(url, {
       method: "POST",
       headers: {
         Accept: "application/json",
-        "X-CSRF-Token": csrf
+        "X-CSRF-Token": token
       },
       body
-    })
+    }), csrf)
   );
 }
 

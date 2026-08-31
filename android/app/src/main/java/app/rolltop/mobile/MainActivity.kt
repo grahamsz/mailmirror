@@ -46,6 +46,10 @@ class MainActivity : ComponentActivity() {
     private var loadingOverlay: FrameLayout? = null
     private var loadingAnimationView: RolltopLoadingView? = null
     private var loadingRevealGate: LoadingRevealGate? = null
+    // A notification can open a message in an otherwise empty WebView history.
+    // Remember its in-app destination so Android Back does not follow WebView's
+    // initial history entry out of the app.
+    private var notificationMessageBackUrl: String? = null
     private val nativeShareStore by lazy { NativeShareStore(applicationContext) }
     private var updatePromptPolicy = UpdatePromptPolicy()
     private val contactPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -93,6 +97,10 @@ class MainActivity : ComponentActivity() {
             if (RolltopPrefs.serverUrl(this).isBlank()) showSetup() else showWeb(intent)
         } else {
             explicitUrlForIntent(intent)?.let { target ->
+                notificationMessageBackUrl = AndroidBackNavigation.messageFallbackUrl(
+                    RolltopPrefs.serverUrl(this),
+                    target
+                )
                 webView?.loadUrl(target)
                 consumeNavigationIntent()
             }
@@ -384,6 +392,9 @@ class MainActivity : ComponentActivity() {
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) checkForServerUpdate()
 
         val explicitTarget = explicitUrlForIntent(sourceIntent)
+        notificationMessageBackUrl = explicitTarget?.let {
+            AndroidBackNavigation.messageFallbackUrl(RolltopPrefs.serverUrl(this), it)
+        }
         val restored = explicitTarget == null && restoredState != null && view.restoreState(restoredState) != null
         if (restored) view.reload() else view.loadUrl(explicitTarget ?: urlForIntent(sourceIntent))
         loadingAnimation.start(restoredLoadingElapsedMs)
@@ -514,6 +525,19 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val view = webView
+                notificationMessageBackUrl
+                    ?.takeIf {
+                        AndroidBackNavigation.messageFallbackUrl(
+                            RolltopPrefs.serverUrl(this@MainActivity),
+                            view?.url
+                        ) != null
+                    }
+                    ?.let {
+                        notificationMessageBackUrl = null
+                        view?.loadUrl(it)
+                        return
+                    }
+                notificationMessageBackUrl = null
                 if (view?.canGoBack() == true) {
                     view.goBack()
                     return
